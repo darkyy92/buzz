@@ -201,3 +201,65 @@ test("imeta and emoji are overlaid together from the edit", () => {
     ["rickroll"],
   );
 });
+
+test("NIP-14 subject from an edit replaces the prior thread title", () => {
+  const original = [
+    ["h", "uuid"],
+    ["subject", "Old title"],
+    ["p", "mention1"],
+  ];
+  const edit = [
+    ["h", "uuid"],
+    ["e", "root"],
+    ["subject", "New title"],
+    ["t", "buzz-thread-title"],
+  ];
+
+  const out = applyEditTagOverlay(original, edit);
+
+  assert.deepEqual(
+    out.filter((tag) => tag[0] === "subject"),
+    [["subject", "New title"]],
+  );
+  assert.deepEqual(
+    out.filter((tag) => tag[0] === "h"),
+    [["h", "uuid"]],
+  );
+  assert.equal(
+    out.some((tag) => tag[0] === "t" && tag[1] === "buzz-thread-title"),
+    false,
+    "the query marker is edit metadata and must not leak into the message",
+  );
+});
+
+test("empty NIP-14 subject clears a prior explicit thread title", () => {
+  const original = [
+    ["h", "uuid"],
+    ["subject", "Old title"],
+  ];
+  const out = applyEditTagOverlay(original, [
+    ["e", "root"],
+    ["subject", ""],
+  ]);
+
+  assert.deepEqual(
+    out.filter((tag) => tag[0] === "subject"),
+    [["subject", ""]],
+  );
+});
+
+test("ordinary body edit preserves the existing thread subject", () => {
+  const original = [
+    ["h", "uuid"],
+    ["subject", "Thread title"],
+  ];
+  const out = applyEditTagOverlay(original, [
+    ["h", "uuid"],
+    ["e", "root"],
+  ]);
+
+  assert.deepEqual(
+    out.filter((tag) => tag[0] === "subject"),
+    [["subject", "Thread title"]],
+  );
+});

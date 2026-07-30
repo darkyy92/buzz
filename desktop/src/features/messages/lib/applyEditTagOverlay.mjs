@@ -22,6 +22,9 @@
  *     `:shortcode:` that the original rendered fine. Preserving on empty is
  *     strictly safe: an orphaned emoji tag whose shortcode is no longer in the
  *     body resolves nothing, so it can't cause a stale render.
+ *   - a NIP-14 `subject` comes from the edit when supplied. This is the one
+ *     mutable metadata field: Buzz uses it as the thread title. An empty
+ *     subject deliberately clears a prior explicit title.
  *   - all other tag kinds (`h`, `e`, `p` mentions, etc.) come exclusively
  *     from the original — the edit can't rewrite channel membership,
  *     thread refs, or mention targets.
@@ -31,13 +34,21 @@
 export function applyEditTagOverlay(originalTags, editTags) {
   if (!editTags) return originalTags;
   const editEmoji = editTags.filter((t) => t[0] === "emoji");
+  const editSubject = editTags.find((t) => t[0] === "subject");
   // imeta is always fully replaced by the edit. emoji is replaced only when
   // the edit actually supplies emoji tags; otherwise the original's are kept.
   const droppedFromOriginal =
     editEmoji.length > 0
       ? (t) => t[0] !== "imeta" && t[0] !== "emoji"
       : (t) => t[0] !== "imeta";
-  const baseFromOriginal = originalTags.filter(droppedFromOriginal);
+  const baseFromOriginal = originalTags
+    .filter(droppedFromOriginal)
+    .filter((t) => !editSubject || t[0] !== "subject");
   const overlaidFromEdit = editTags.filter((t) => t[0] === "imeta");
-  return [...baseFromOriginal, ...overlaidFromEdit, ...editEmoji];
+  return [
+    ...baseFromOriginal,
+    ...overlaidFromEdit,
+    ...editEmoji,
+    ...(editSubject ? [editSubject] : []),
+  ];
 }

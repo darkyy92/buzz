@@ -380,11 +380,34 @@ pub fn build_edit(
     target_event_id: nostr::EventId,
     new_content: &str,
 ) -> Result<EventBuilder, SdkError> {
+    build_edit_with_subject(channel_id, target_event_id, new_content, None)
+}
+
+/// Build an edit event with an optional NIP-14 thread title.
+///
+/// Subject-bearing edits carry a stable marker so clients can query thread
+/// titles without scanning every message edit. Pass `Some("")` to clear an
+/// explicit title while preserving the relay edit history.
+pub fn build_edit_with_subject(
+    channel_id: Uuid,
+    target_event_id: nostr::EventId,
+    new_content: &str,
+    subject: Option<&str>,
+) -> Result<EventBuilder, SdkError> {
     check_content(new_content, 64 * 1024)?;
-    let tags = vec![
+    if subject.is_some_and(|value| value.chars().count() > 80) {
+        return Err(SdkError::InvalidInput(
+            "thread title exceeds maximum length of 80 characters".into(),
+        ));
+    }
+    let mut tags = vec![
         tag(&["h", &channel_id.to_string()])?,
         tag(&["e", &target_event_id.to_hex()])?,
     ];
+    if let Some(subject) = subject {
+        tags.push(tag(&["subject", subject])?);
+        tags.push(tag(&["t", "buzz-thread-title"])?);
+    }
     Ok(EventBuilder::new(Kind::Custom(40003), new_content).tags(tags))
 }
 
@@ -2187,6 +2210,28 @@ mod tests {
         let ev = sign(build_edit(cid, eid, "new content").unwrap());
         assert_eq!(ev.kind.as_u16(), 40003);
         assert!(has_tag(&ev, "e", &eid.to_hex()));
+    }
+
+    #[test]
+    fn edit_with_subject_has_nip14_subject_and_query_marker() {
+        let cid = uuid();
+        let eid = event_id();
+        let ev = sign(
+            build_edit_with_subject(cid, eid, "unchanged body", Some("Release notes")).unwrap(),
+        );
+        assert!(has_tag(&ev, "subject", "Release notes"));
+        assert!(has_tag(&ev, "t", "buzz-thread-title"));
+    }
+
+    #[test]
+    fn edit_rejects_subject_over_80_characters() {
+        let cid = uuid();
+        let eid = event_id();
+        let title = "x".repeat(81);
+        assert!(matches!(
+            build_edit_with_subject(cid, eid, "body", Some(&title)),
+            Err(SdkError::InvalidInput(_))
+        ));
     }
 
     #[test]

@@ -56,6 +56,7 @@ import { SidebarUpdateCard } from "@/features/settings/SidebarUpdateCard";
 import { useUpdaterContext } from "@/features/settings/hooks/UpdaterProvider";
 import { shouldShowSidebarUpdateCard } from "@/features/settings/sidebarUpdateCardVisibility";
 import type { SettingsSection } from "@/features/settings/ui/SettingsPanels";
+import { useThreadSidebarProps } from "@/features/threads/hooks";
 import type {
   Channel,
   ChannelVisibility,
@@ -387,7 +388,7 @@ export function AppSidebar({
     () => channels.filter((channel) => channel.channelType === "stream"),
     [channels],
   );
-
+  const namedThreadProps = useThreadSidebarProps(streamChannels, currentPubkey);
   const sectionBuckets = React.useMemo(() => {
     const bySection: Record<string, Channel[]> = {};
     const unassigned: Channel[] = [];
@@ -631,6 +632,7 @@ export function AppSidebar({
                       isActiveChannel={selectedView === "channel"}
                       activeWorkingByChannelId={activeWorkingByChannelId}
                       items={starredChannels}
+                      {...namedThreadProps}
                       sortMode={sortModeFor("starred")}
                       onSortModeChange={(mode) =>
                         setSortModeFor("starred", mode)
@@ -682,6 +684,7 @@ export function AppSidebar({
                         isActiveChannel={selectedView === "channel"}
                         activeWorkingByChannelId={activeWorkingByChannelId}
                         selectedChannelId={selectedChannelId}
+                        {...namedThreadProps}
                         unreadChannelCounts={unreadChannelCounts}
                         unreadChannelIds={unreadChannelIds}
                         sections={channelSections}
@@ -737,6 +740,7 @@ export function AppSidebar({
                       isActiveChannel={selectedView === "channel"}
                       activeWorkingByChannelId={activeWorkingByChannelId}
                       items={sectionBuckets.unassigned}
+                      {...namedThreadProps}
                       sortMode={sortModeFor("channels")}
                       onSortModeChange={(mode) =>
                         setSortModeFor("channels", mode)

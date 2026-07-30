@@ -894,6 +894,7 @@ type MockFilter = {
   "#e"?: string[];
   "#h"?: string[];
   "#p"?: string[];
+  "#t"?: string[];
   authors?: string[];
   ids?: string[];
   kinds?: number[];
@@ -3833,22 +3834,12 @@ function prependMockHistory(input: {
 function emitMockHistory(
   socket: MockSocket,
   subId: string,
-  channelId: string,
+  channelIds: string[],
   filter: MockFilter,
 ) {
-  const events = getMockMessageStore(channelId)
-    .filter((event) => {
-      if (filter.kinds && !filter.kinds.includes(event.kind)) {
-        return false;
-      }
-      if (filter.since !== undefined && event.created_at < filter.since) {
-        return false;
-      }
-      if (filter.until !== undefined && event.created_at > filter.until) {
-        return false;
-      }
-      return true;
-    })
+  const events = channelIds
+    .flatMap((channelId) => getMockMessageStore(channelId))
+    .filter((event) => mockEventMatchesFilter(event, filter))
     // Relay order is `created_at DESC, id ASC` — match it (both the WS history
     // page and the `get_channel_messages_before` keyset are backed by that one
     // order in production, so the mock must be self-consistent too, else a
@@ -3874,6 +3865,43 @@ function emitMockHistory(
   };
 
   emit();
+}
+
+function mockEventMatchesFilter(event: RelayEvent, filter: MockFilter) {
+  if (filter.ids && !filter.ids.includes(event.id)) return false;
+  if (filter.kinds && !filter.kinds.includes(event.kind)) return false;
+  if (
+    filter.authors &&
+    !filter.authors.some((author) =>
+      event.pubkey.toLowerCase().startsWith(author.toLowerCase()),
+    )
+  ) {
+    return false;
+  }
+  if (filter.since !== undefined && event.created_at < filter.since) {
+    return false;
+  }
+  if (filter.until !== undefined && event.created_at > filter.until) {
+    return false;
+  }
+  for (const [key, values] of Object.entries(filter)) {
+    if (!key.startsWith("#") || !Array.isArray(values) || values.length === 0) {
+      continue;
+    }
+    const tagValues = values as string[];
+    const tagName = key.slice(1);
+    if (
+      !event.tags.some(
+        (tag) =>
+          tag[0] === tagName &&
+          typeof tag[1] === "string" &&
+          tagValues.includes(tag[1]),
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function emitMockLiveEvent(channelId: string, event: RelayEvent) {
@@ -8711,6 +8739,7 @@ async function handleEditMessage(
     content: string;
     mediaTags?: string[][] | null;
     emojiTags?: string[][] | null;
+    subject?: string;
   },
   config: E2eConfig | undefined,
 ): Promise<void> {
@@ -8718,6 +8747,10 @@ async function handleEditMessage(
   const emojiTags = args.emojiTags ?? [];
   const extraTags = [...mediaTags, ...emojiTags];
   const tags = [["h", args.channelId], ["e", args.eventId], ...extraTags];
+  if (typeof args.subject === "string") {
+    tags.push(["subject", args.subject.trim()]);
+    tags.push(["t", "buzz-thread-title"]);
+  }
   const content = args.content.trim();
   const identity = getIdentity(config);
 
@@ -9077,8 +9110,9 @@ function sendToMockSocket(args: {
       const kinds = new Set<number>();
       const ownerPubkeys = new Set<string>();
       for (const f of filters) {
-        const cid = f["#h"]?.[0];
-        if (cid) channelIds.add(cid);
+        for (const channelId of f["#h"] ?? []) {
+          channelIds.add(channelId);
+        }
         for (const kind of f.kinds ?? []) {
           kinds.add(kind);
         }
@@ -9205,8 +9239,8 @@ function sendToMockSocket(args: {
       return;
     }
 
-    const channelId = filter["#h"]?.[0];
-    if (!channelId) {
+    const channelIds = filter["#h"];
+    if (!channelIds || channelIds.length === 0) {
       // Aux-backfill filters (reactions/deletions) are `#e`-keyed with no
       // channel tag — serve them across all channel stores like the relay.
       const referencedIds = filter["#e"];
@@ -9214,10 +9248,8 @@ function sendToMockSocket(args: {
         const targets = new Set(referencedIds);
         for (const events of mockMessages.values()) {
           for (const event of events) {
-            if (filter.kinds && !filter.kinds.includes(event.kind)) {
-              continue;
-            }
             if (
+              mockEventMatchesFilter(event, filter) &&
               event.tags.some(
                 (tag) => tag[0] === "e" && tag[1] && targets.has(tag[1]),
               )
@@ -9231,7 +9263,7 @@ function sendToMockSocket(args: {
       return;
     }
 
-    emitMockHistory(socket, subId, channelId, filter);
+    emitMockHistory(socket, subId, channelIds, filter);
     return;
   }
 
