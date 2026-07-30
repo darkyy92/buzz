@@ -7,16 +7,28 @@ import {
   namedThreadsForChannel,
   parseNamedThreadTitleEdit,
   reduceNamedThreadTitleEdits,
+  resolveThreadDisplayTitle,
+  retainNamedThreadsWithRootEvents,
+  upsertNamedThreadTitleStateEvent,
 } from "./namedThreads.ts";
 
-function event({ createdAt, id, kind = 40009, pubkey = "alice", tags }) {
+const ROOT_1 = "1".repeat(64);
+
+function event({
+  createdAt,
+  id,
+  kind = 40009,
+  pubkey = "alice",
+  tags,
+  content = "body",
+}) {
   return {
     id,
     pubkey,
     created_at: createdAt,
     kind,
     tags,
-    content: "body",
+    content,
     sig: "",
   };
 }
@@ -27,10 +39,11 @@ function titleEdit(id, createdAt, title, channelId = "channel-1") {
     createdAt,
     tags: [
       ["h", channelId],
-      ["e", "root-1"],
+      ["e", ROOT_1],
       ["subject", title],
       ["t", "buzz-thread-title"],
     ],
+    content: "",
   });
 }
 
@@ -59,6 +72,107 @@ test("only marked title protocol events become named threads", () => {
     null,
   );
   assert.equal(parseNamedThreadTitleEdit({ ...valid, kind: 40010 }), null);
+});
+
+test("title parser fails closed on ambiguous targets and malformed protocol shapes", () => {
+  const valid = titleEdit("edit-1", 10, "Release notes");
+  assert.equal(
+    parseNamedThreadTitleEdit({
+      ...valid,
+      tags: [...valid.tags, ["e", "2".repeat(64)]],
+    }),
+    null,
+  );
+  assert.equal(
+    parseNamedThreadTitleEdit({ ...valid, content: "must stay metadata-only" }),
+    null,
+  );
+  assert.equal(
+    parseNamedThreadTitleEdit({
+      ...valid,
+      tags: [...valid.tags, ["subject", "second"]],
+    }),
+    null,
+  );
+  assert.equal(
+    parseNamedThreadTitleEdit({
+      ...valid,
+      tags: valid.tags.map((tag) =>
+        tag[0] === "subject" ? ["subject", "x".repeat(81)] : tag,
+      ),
+    }),
+    null,
+  );
+});
+
+test("empty subject crosses the protocol boundary as a valid clear", () => {
+  const clear = parseNamedThreadTitleEdit(titleEdit("edit-clear", 20, ""));
+  assert.ok(clear);
+  assert.equal(clear.title, "");
+  assert.deepEqual(
+    reduceNamedThreadTitleEdits([
+      titleEdit("edit-set", 10, "Release notes"),
+      titleEdit("edit-clear", 20, ""),
+    ]),
+    [],
+  );
+});
+
+test("a live clear before initial history load persists as a hidden tombstone", () => {
+  const states = upsertNamedThreadTitleStateEvent(
+    [],
+    titleEdit("clear-live", 20, ""),
+  );
+
+  assert.equal(states.length, 1);
+  assert.equal(states[0].title, "");
+  assert.deepEqual(namedThreadsForChannel(states, "channel-1"), []);
+});
+
+test("a clear tombstone overrides a stale root subject and falls back to the body", () => {
+  assert.equal(
+    resolveThreadDisplayTitle(
+      "Body fallback",
+      [["subject", "Stale root subject"]],
+      { title: "" },
+    ),
+    "Body fallback",
+  );
+});
+
+test("only true supported roots survive named-thread validation", () => {
+  const [thread] = reduceNamedThreadTitleEdits([
+    titleEdit("edit-1", 10, "Release notes"),
+  ]);
+  const root = event({
+    id: ROOT_1,
+    createdAt: 1,
+    kind: 9,
+    content: "root",
+    tags: [["h", "channel-1"]],
+  });
+  assert.deepEqual(retainNamedThreadsWithRootEvents([thread], [root]), [
+    thread,
+  ]);
+  assert.deepEqual(
+    retainNamedThreadsWithRootEvents(
+      [thread],
+      [
+        {
+          ...root,
+          tags: [
+            ["h", "channel-1"],
+            ["e", "2".repeat(64), "", "reply"],
+          ],
+        },
+      ],
+    ),
+    [],
+  );
+  assert.deepEqual(
+    retainNamedThreadsWithRootEvents([thread], [{ ...root, kind: 45003 }]),
+    [],
+  );
 });
 
 test("latest title wins and a later empty subject clears the explicit thread", () => {
@@ -101,7 +215,7 @@ test("reply activity tracks recency and the newest incoming unread candidate", (
         pubkey: "bob",
         tags: [
           ["h", "channel-1"],
-          ["e", "root-1", "", "root"],
+          ["e", ROOT_1, "", "root"],
         ],
       }),
       event({
@@ -111,7 +225,7 @@ test("reply activity tracks recency and the newest incoming unread candidate", (
         pubkey: "alice",
         tags: [
           ["h", "channel-1"],
-          ["e", "root-1", "", "root"],
+          ["e", ROOT_1, "", "root"],
         ],
       }),
     ],

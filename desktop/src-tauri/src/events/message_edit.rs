@@ -23,11 +23,7 @@ pub fn build_message_edit(
     tags.extend(mention_tags(mentions)?);
     imeta_tags(media_tags, &mut tags)?;
     emoji_tags(custom_emoji_tags, &mut tags)?;
-    Ok(EventBuilder::new(
-        Kind::Custom(KIND_STREAM_MESSAGE_EDIT as u16),
-        content,
-    )
-    .tags(tags))
+    Ok(EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE_EDIT as u16), content).tags(tags))
 }
 
 /// Kind 40009 metadata-only NIP-14 title edit.
@@ -45,11 +41,7 @@ pub fn build_thread_title_edit(
         tag(vec!["subject", subject])?,
         tag(vec!["t", THREAD_TITLE_MARKER])?,
     ];
-    Ok(EventBuilder::new(
-        Kind::Custom(KIND_STREAM_THREAD_TITLE as u16),
-        "",
-    )
-    .tags(tags))
+    Ok(EventBuilder::new(Kind::Custom(KIND_STREAM_THREAD_TITLE as u16), "").tags(tags))
 }
 
 #[cfg(test)]
@@ -67,13 +59,15 @@ mod tests {
             EventId::from_hex("d24da132115ca0a46233cf4c2ad8338fbf914250cbcaa9181a6dd59533cb5ac1")
                 .unwrap();
         let builder = build_thread_title_edit(channel, target, "Release notes").unwrap();
-        let key = SecretKey::from_hex(
-            "0000000000000000000000000000000000000000000000000000000000000003",
-        )
-        .unwrap();
+        let key =
+            SecretKey::from_hex("0000000000000000000000000000000000000000000000000000000000000003")
+                .unwrap();
         let event = builder.sign_with_keys(&Keys::new(key)).unwrap();
-        let tags: Vec<Vec<String>> =
-            event.tags.iter().map(|tag| tag.as_slice().to_vec()).collect();
+        let tags: Vec<Vec<String>> = event
+            .tags
+            .iter()
+            .map(|tag| tag.as_slice().to_vec())
+            .collect();
         assert_eq!(
             event.kind,
             nostr::Kind::Custom(KIND_STREAM_THREAD_TITLE as u16)

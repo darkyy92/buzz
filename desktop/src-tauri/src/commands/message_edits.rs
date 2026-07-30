@@ -1,11 +1,7 @@
 use nostr::EventId;
 use tauri::State;
 
-use crate::{
-    app_state::AppState,
-    events,
-    relay::submit_event,
-};
+use crate::{app_state::AppState, events, relay::submit_event};
 
 #[tauri::command]
 pub async fn edit_message(

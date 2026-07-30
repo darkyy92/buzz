@@ -13,6 +13,12 @@ import {
   getThreadReference,
   isBroadcastReply,
 } from "@/features/messages/lib/threading";
+import { getSingleMessageMutationTargetId } from "@/features/messages/lib/messageMutationTarget";
+import {
+  isNamedThreadRootEvent,
+  parseNamedThreadTitleEdit,
+  THREAD_TITLE_MARKER,
+} from "@/features/threads/namedThreads";
 import {
   formatOwnerLabel,
   resolveUserLabel,
@@ -46,7 +52,6 @@ import { applyEditTagOverlay } from "@/features/messages/lib/applyEditTagOverlay
 import { truncatePubkey } from "@/shared/lib/pubkey";
 
 const HEX_RE = /^[0-9a-f]+$/i;
-const THREAD_TITLE_MARKER = "buzz-thread-title";
 
 export function isTimelineContentEvent(event: RelayEvent) {
   return (
@@ -234,6 +239,7 @@ export function formatTimelineMessages(
     string,
     { id: string; tag: string[]; createdAt: number }
   >();
+  const rawEventsById = new Map(events.map((event) => [event.id, event]));
   for (const event of events) {
     if (
       (event.kind !== KIND_STREAM_MESSAGE_EDIT &&
@@ -243,7 +249,7 @@ export function formatTimelineMessages(
       continue;
     }
 
-    const targetId = getReactionTargetId(event.tags);
+    const targetId = getSingleMessageMutationTargetId(event.tags);
     if (!targetId || deletedEventIds.has(targetId)) {
       continue;
     }
@@ -264,7 +270,20 @@ export function formatTimelineMessages(
       }
     }
 
-    const subjectTag = event.tags.find((tag) => tag[0] === "subject");
+    const parsedTitle = parseNamedThreadTitleEdit(event);
+    const titleRoot = parsedTitle
+      ? rawEventsById.get(parsedTitle.rootId)
+      : undefined;
+    const subjectTag =
+      parsedTitle &&
+      titleRoot &&
+      !deletedEventIds.has(titleRoot.id) &&
+      isNamedThreadRootEvent(titleRoot) &&
+      titleRoot.tags.some(
+        (tag) => tag[0] === "h" && tag[1] === parsedTitle.channelId,
+      )
+        ? ["subject", parsedTitle.title]
+        : null;
     const existingSubject = subjectsByTargetId.get(targetId);
     if (
       subjectTag &&

@@ -42,7 +42,8 @@ export function NamedThreadRows({
         key={thread.rootId}
       >
         <SidebarMenuButton
-          aria-label={`Open thread ${thread.title}`}
+          aria-current={isActive ? "page" : undefined}
+          aria-label={`Open thread ${thread.title}${hasUnread ? ", unread replies" : ""}`}
           className={cn(
             "pl-7 pr-2 text-sidebar-foreground/70",
             hasUnread &&

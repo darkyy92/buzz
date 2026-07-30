@@ -15,6 +15,7 @@ import {
   MSG_PREFIX,
   THREAD_PREFIX,
 } from "@/features/channels/readState/readStateFormat";
+import { latestTopLevelChannelMessage } from "@/features/channels/lib/latestTopLevelChannelMessage";
 import { ChannelScreenEmptyState } from "@/features/channels/ui/ChannelScreenEmptyState";
 import { ChannelScreenHeader } from "@/features/channels/ui/ChannelScreenHeader";
 import { ChannelPane } from "@/features/channels/ui/ChannelScreenLazyViews";
@@ -48,7 +49,6 @@ import {
   channelWindowThreadSummaries,
   type ChannelWindowThreadSummary,
 } from "@/features/messages/lib/channelWindowStore";
-import { getThreadReference } from "@/features/messages/lib/threading";
 import { imetaMediaFromTags } from "@/features/messages/lib/imetaMediaMarkdown";
 import {
   resolveTimelineLoadingLatch,
@@ -195,13 +195,7 @@ export function ChannelScreen({
     useFetchOlderMessages(activeChannel);
   const latestActiveMessage = React.useMemo(() => {
     const messages = messagesQuery.data;
-    if (!messages) return null;
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      if (getThreadReference(messages[index].tags).parentId === null) {
-        return messages[index];
-      }
-    }
-    return null;
+    return messages ? latestTopLevelChannelMessage(messages) : null;
   }, [messagesQuery.data]);
   const activeReadAt = latestActiveMessage
     ? new Date(latestActiveMessage.created_at * 1_000).toISOString()

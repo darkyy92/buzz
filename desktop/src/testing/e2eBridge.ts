@@ -1039,6 +1039,13 @@ declare global {
       /** 64-hex id required for the event to be a valid reaction target. */
       id?: string;
     }) => RelayEvent;
+    __BUZZ_E2E_EMIT_MOCK_THREAD_TITLE__?: (input: {
+      channelName: string;
+      rootId: string;
+      title: string;
+      pubkey?: string;
+      createdAt?: number;
+    }) => RelayEvent;
     /** Prepend `count` synthetic older messages to a channel's mock store so
      *  an older-history fetch has something to paginate. Mirrors how the real
      *  relay backfills history. Returns the created events. */
@@ -1260,6 +1267,10 @@ const REACTION_EMOJI_URL = `${DEFAULT_RELAY_HTTP_URL}/media/${REACTION_EMOJI_SHA
 // test locates its row without relying on seed ordering.
 const REACTION_TARGET_EVENT_ID = "d".repeat(64);
 const REACTION_TARGET_CONTENT = "React to me with a custom emoji";
+// Current-viewer-owned canonical root used by the named-thread persistence
+// guard. Kept after the row-index-sensitive welcome/Alice seeds.
+const NAMED_THREAD_TARGET_EVENT_ID = "f".repeat(64);
+const NAMED_THREAD_TARGET_CONTENT = "Named thread root for sidebar tests";
 // System-message reaction target id (kind:40099 join event). Distinct 64-hex
 // id so it is a valid reaction target and never collides with the regular
 // REACTION_TARGET_EVENT_ID.
@@ -3661,6 +3672,15 @@ function getMockMessageStore(channelId: string): RelayEvent[] {
             kind: 9,
             tags: [["h", channelId]],
             content: REACTION_TARGET_CONTENT,
+            sig: "mocksig".repeat(20).slice(0, 128),
+          },
+          {
+            id: NAMED_THREAD_TARGET_EVENT_ID,
+            pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
+            created_at: Math.floor(Date.now() / 1000) - 40,
+            kind: 9,
+            tags: [["h", channelId]],
+            content: NAMED_THREAD_TARGET_CONTENT,
             sig: "mocksig".repeat(20).slice(0, 128),
           },
           // System-message reaction target. A kind:40099 join event renders via
@@ -9585,6 +9605,35 @@ export function maybeInstallE2eTauriMocks() {
       pending,
       id,
     );
+  };
+  window.__BUZZ_E2E_EMIT_MOCK_THREAD_TITLE__ = ({
+    channelName,
+    rootId,
+    title,
+    pubkey,
+    createdAt,
+  }) => {
+    const channel = mockChannels.find(
+      (candidate) => candidate.name === channelName,
+    );
+    if (!channel) {
+      throw new Error(`Mock channel ${channelName} not found.`);
+    }
+    const titleEvent = createMockEvent(
+      KIND_STREAM_THREAD_TITLE,
+      "",
+      [
+        ["h", channel.id],
+        ["e", rootId],
+        ["subject", title],
+        ["t", "buzz-thread-title"],
+      ],
+      pubkey ?? CHARLIE_PUBKEY,
+      createdAt,
+    );
+    recordMockMessage(channel.id, titleEvent);
+    emitMockLiveEvent(channel.id, titleEvent);
+    return titleEvent;
   };
   window.__BUZZ_E2E_PREPEND_MOCK_HISTORY__ = prependMockHistory;
   window.__BUZZ_E2E_EMIT_MOCK_TYPING__ = ({

@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { waitForAnimations } from "../helpers/animations";
 import { TEST_IDENTITIES, installMockBridge } from "../helpers/bridge";
 
-const THREAD_ROOT_ID = "mock-general-welcome";
+const THREAD_ROOT_ID = "f".repeat(64);
 
 async function expectThreadReadAtLeast(page: Page, timestamp: number) {
   await expect
@@ -43,23 +43,27 @@ test("thread rename persists to the relay-backed sidebar row", async ({
     )
     .toBe(true);
   await page.evaluate(
-    ({ pubkey }) => {
+    ({ pubkey, rootId }) => {
       window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: "Initial reply for named thread",
-        parentEventId: "mock-general-welcome",
+        parentEventId: rootId,
         pubkey,
         createdAt: Math.floor(Date.now() / 1_000) - 5,
       });
     },
-    { pubkey: TEST_IDENTITIES.alice.pubkey },
+    { pubkey: TEST_IDENTITIES.alice.pubkey, rootId: THREAD_ROOT_ID },
   );
 
-  await page.getByTestId("message-thread-summary").first().click();
+  await page
+    .locator(
+      `[data-testid="message-thread-summary"][data-thread-head-id="${THREAD_ROOT_ID}"]`,
+    )
+    .click();
   const panel = page.getByTestId("message-thread-panel");
   await expect(panel).toBeVisible();
   await expect(panel.getByTestId("message-thread-title")).toContainText(
-    "Welcome to #general",
+    "Named thread root for sidebar tests",
   );
 
   // Escape cancels title editing without closing the enclosing thread panel.
@@ -79,10 +83,11 @@ test("thread rename persists to the relay-backed sidebar row", async ({
   await expect(panel.getByTestId("message-thread-title")).toHaveText(
     "Release launch plan",
   );
-  const namedRow = page.getByTestId("named-thread-mock-general-welcome");
+  const namedRow = page.getByTestId(`named-thread-${THREAD_ROOT_ID}`);
   await expect(namedRow).toBeVisible();
   await expect(namedRow).toHaveText("Release launch plan");
   await expect(namedRow).toHaveAttribute("data-active", "true");
+  await expect(namedRow).toHaveAttribute("aria-current", "page");
   await expect(namedRow).toHaveAttribute("title", "Release launch plan");
 
   await waitForAnimations(page);
@@ -106,19 +111,43 @@ test("thread rename persists to the relay-backed sidebar row", async ({
     },
     { pubkey: TEST_IDENTITIES.alice.pubkey, rootId: THREAD_ROOT_ID },
   );
-  const unreadDot = page.getByTestId(
-    "named-thread-unread-mock-general-welcome",
-  );
+  const unreadDot = page.getByTestId(`named-thread-unread-${THREAD_ROOT_ID}`);
   await expect(unreadDot).toBeVisible();
+  await expect(namedRow).toHaveAttribute(
+    "aria-label",
+    "Open thread Release launch plan, unread replies",
+  );
   await namedRow.click();
   await expect(panel).toBeVisible();
   await expect(panel.getByTestId("message-thread-title")).toHaveText(
     "Release launch plan",
   );
-  await expect(page).toHaveURL(
-    /#\/channels\/[^?]+\?(?:.*&)?thread=mock-general-welcome(?:&.*)?$/,
-  );
+  await expect(page).toHaveURL(new RegExp(`thread=${THREAD_ROOT_ID}`));
   await expectThreadReadAtLeast(page, unreadReplyAt);
+
+  // A later relay rename updates both surfaces. An active local draft remains
+  // untouched until the user cancels or saves it.
+  await panel.getByTestId("rename-thread").click();
+  const remoteDraft = panel.getByRole("textbox", { name: "Thread title" });
+  await remoteDraft.fill("Unsaved local draft");
+  await page.evaluate(
+    ({ pubkey, rootId }) => {
+      window.__BUZZ_E2E_EMIT_MOCK_THREAD_TITLE__?.({
+        channelName: "general",
+        rootId,
+        title: "Remote launch plan",
+        pubkey,
+        createdAt: Math.floor(Date.now() / 1_000) + 240,
+      });
+    },
+    { pubkey: TEST_IDENTITIES.alice.pubkey, rootId: THREAD_ROOT_ID },
+  );
+  await expect(remoteDraft).toHaveValue("Unsaved local draft");
+  await remoteDraft.press("Escape");
+  await expect(panel.getByTestId("message-thread-title")).toHaveText(
+    "Remote launch plan",
+  );
+  await expect(namedRow).toHaveText("Remote launch plan");
 
   // Opening from the named row advances the durable thread frontier.
   await page.getByTestId("auxiliary-panel-close").click();
@@ -126,6 +155,7 @@ test("thread rename persists to the relay-backed sidebar row", async ({
   await namedRow.click();
   await expect(panel).toBeVisible();
   await page.getByTestId("auxiliary-panel-close").click();
+  await expect(panel).toHaveCount(0);
   await expect(unreadDot).toHaveCount(0);
 
   // A non-sidebar open is authoritative too: a thread-summary click must
@@ -145,21 +175,34 @@ test("thread rename persists to the relay-backed sidebar row", async ({
     { pubkey: TEST_IDENTITIES.alice.pubkey, rootId: THREAD_ROOT_ID },
   );
   await expect(unreadDot).toBeVisible();
-  await page.getByTestId("message-thread-summary").first().click();
+  await page
+    .locator(
+      `[data-testid="message-thread-summary"][data-thread-head-id="${THREAD_ROOT_ID}"]`,
+    )
+    .click();
   await expect(panel).toBeVisible();
   await expectThreadReadAtLeast(page, summaryUnreadReplyAt);
+  await page.getByTestId("auxiliary-panel-close").click();
+  await expect(panel).toHaveCount(0);
   await page.evaluate(
-    ({ pubkey }) => {
+    ({ pubkey, rootId }) => {
       window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
-        content: "Live reply after the panel opened",
-        parentEventId: "mock-general-welcome",
+        content: "Unread reply after the panel closed",
+        parentEventId: rootId,
         pubkey,
         createdAt: Math.floor(Date.now() / 1_000) + 180,
       });
     },
-    { pubkey: TEST_IDENTITIES.alice.pubkey },
+    { pubkey: TEST_IDENTITIES.alice.pubkey, rootId: THREAD_ROOT_ID },
   );
-  await page.getByTestId("auxiliary-panel-close").click();
   await expect(unreadDot).toBeVisible();
+
+  // The exact root is URL-backed: a true cold reload reopens that thread even
+  // when the in-memory named-title event cache has been rebuilt.
+  await namedRow.click();
+  await expect(panel).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId("message-thread-panel")).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`thread=${THREAD_ROOT_ID}`));
 });

@@ -348,6 +348,7 @@ buzz agents archived"
 }
 
 #[derive(Subcommand)]
+/// Agent slash-command catalog operations.
 pub enum AgentCommandsCmd {
     /// Publish the complete versioned slash-command catalog
     #[command(after_help = "The input is the NIP-78 v1 JSON content:\n  \

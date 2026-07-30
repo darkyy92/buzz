@@ -1,6 +1,11 @@
 import type { RelayEvent } from "@/shared/api/types";
+import { getSingleMessageMutationTargetId } from "@/features/messages/lib/messageMutationTarget";
+import { getThreadReference } from "@/features/messages/lib/threading";
 import {
+  KIND_FORUM_POST,
+  KIND_STREAM_MESSAGE,
   KIND_STREAM_MESSAGE_EDIT,
+  KIND_STREAM_MESSAGE_V2,
   KIND_STREAM_THREAD_TITLE,
 } from "@/shared/constants/kinds";
 
@@ -8,6 +13,11 @@ export const THREAD_TITLE_MARKER = "buzz-thread-title";
 export const MAX_THREAD_TITLE_LENGTH = 80;
 export const MAX_NAMED_THREADS_PER_CHANNEL = 12;
 export const NAMED_THREAD_QUERY_LIMIT = 1_000;
+const NAMED_THREAD_ROOT_KINDS = new Set([
+  KIND_STREAM_MESSAGE,
+  KIND_STREAM_MESSAGE_V2,
+  KIND_FORUM_POST,
+]);
 
 export type NamedThread = {
   channelId: string;
@@ -32,7 +42,7 @@ function tagValue(tags: string[][] | undefined, name: string): string | null {
   return tags?.find((tag) => tag[0] === name)?.[1] ?? null;
 }
 
-function isNewer(
+export function isNewerNamedThreadTitle(
   candidate: { id: string; createdAt: number },
   current: { id: string; createdAt: number },
 ): boolean {
@@ -67,6 +77,18 @@ export function explicitThreadTitleFromTags(
   return normalizeThreadTitle(subject) || null;
 }
 
+export function resolveThreadDisplayTitle(
+  body: string,
+  tags: string[][] | undefined,
+  titleState?: Pick<NamedThread, "title">,
+): string {
+  const explicitTitle =
+    titleState === undefined
+      ? explicitThreadTitleFromTags(tags)
+      : normalizeThreadTitle(titleState.title) || null;
+  return explicitTitle ?? deriveFallbackThreadTitle(body);
+}
+
 export function parseNamedThreadTitleEdit(
   event: RelayEvent,
   allowedChannelIds?: ReadonlySet<string>,
@@ -77,18 +99,22 @@ export function parseNamedThreadTitleEdit(
   ) {
     return null;
   }
-  if (
-    !event.tags.some((tag) => tag[0] === "t" && tag[1] === THREAD_TITLE_MARKER)
-  ) {
+  if (event.kind === KIND_STREAM_THREAD_TITLE && event.content !== "") {
     return null;
   }
+  const markers = event.tags.filter(
+    (tag) => tag[0] === "t" && tag[1] === THREAD_TITLE_MARKER,
+  );
+  if (markers.length !== 1) return null;
   const channelId = tagValue(event.tags, "h");
-  const rootId = tagValue(event.tags, "e");
-  const rawSubject = tagValue(event.tags, "subject");
+  const rootId = getSingleMessageMutationTargetId(event.tags);
+  const subjects = event.tags.filter((tag) => tag[0] === "subject");
+  const rawSubject = subjects.length === 1 ? subjects[0]?.[1] : null;
   if (
     !channelId ||
     !rootId ||
-    rawSubject === null ||
+    typeof rawSubject !== "string" ||
+    Array.from(rawSubject).length > MAX_THREAD_TITLE_LENGTH ||
     (allowedChannelIds && !allowedChannelIds.has(channelId))
   ) {
     return null;
@@ -102,7 +128,28 @@ export function parseNamedThreadTitleEdit(
   };
 }
 
-export function reduceNamedThreadTitleEdits(
+export function isNamedThreadRootEvent(event: RelayEvent): boolean {
+  return (
+    NAMED_THREAD_ROOT_KINDS.has(event.kind) &&
+    getThreadReference(event.tags).parentId === null
+  );
+}
+
+export function retainNamedThreadsWithRootEvents(
+  threads: NamedThread[],
+  rootEvents: RelayEvent[],
+): NamedThread[] {
+  const validRoots = new Set(
+    rootEvents
+      .filter(isNamedThreadRootEvent)
+      .map((event) => `${tagValue(event.tags, "h") ?? ""}:${event.id}`),
+  );
+  return threads.filter((thread) =>
+    validRoots.has(`${thread.channelId}:${thread.rootId}`),
+  );
+}
+
+export function reduceNamedThreadTitleStates(
   events: RelayEvent[],
   allowedChannelIds?: ReadonlySet<string>,
 ): NamedThread[] {
@@ -114,7 +161,7 @@ export function reduceNamedThreadTitleEdits(
     const existing = latestByRoot.get(key);
     if (
       !existing ||
-      isNewer(
+      isNewerNamedThreadTitle(
         { id: parsed.titleEventId, createdAt: parsed.titleUpdatedAt },
         { id: existing.titleEventId, createdAt: existing.titleUpdatedAt },
       )
@@ -123,17 +170,24 @@ export function reduceNamedThreadTitleEdits(
     }
   }
 
-  return [...latestByRoot.values()]
-    .filter((thread) => thread.title.length > 0)
-    .map((thread) => ({
-      ...thread,
-      lastReplyAt: null,
-      lastIncomingReplyAt: null,
-      lastActivityAt: thread.titleUpdatedAt,
-    }));
+  return [...latestByRoot.values()].map((thread) => ({
+    ...thread,
+    lastReplyAt: null,
+    lastIncomingReplyAt: null,
+    lastActivityAt: thread.titleUpdatedAt,
+  }));
 }
 
-export function upsertNamedThreadTitleEvent(
+export function reduceNamedThreadTitleEdits(
+  events: RelayEvent[],
+  allowedChannelIds?: ReadonlySet<string>,
+): NamedThread[] {
+  return reduceNamedThreadTitleStates(events, allowedChannelIds).filter(
+    (thread) => thread.title.length > 0,
+  );
+}
+
+export function upsertNamedThreadTitleStateEvent(
   threads: NamedThread[],
   event: RelayEvent,
   allowedChannelIds?: ReadonlySet<string>,
@@ -147,17 +201,12 @@ export function upsertNamedThreadTitleEvent(
   const existing = index >= 0 ? threads[index] : null;
   if (
     existing &&
-    !isNewer(
+    !isNewerNamedThreadTitle(
       { id: parsed.titleEventId, createdAt: parsed.titleUpdatedAt },
       { id: existing.titleEventId, createdAt: existing.titleUpdatedAt },
     )
   ) {
     return threads;
-  }
-  if (!parsed.title) {
-    return existing
-      ? threads.filter((_, threadIndex) => threadIndex !== index)
-      : threads;
   }
   const next: NamedThread = {
     channelId: parsed.channelId,
@@ -173,6 +222,18 @@ export function upsertNamedThreadTitleEvent(
   return threads.map((thread, threadIndex) =>
     threadIndex === index ? next : thread,
   );
+}
+
+export function upsertNamedThreadTitleEvent(
+  threads: NamedThread[],
+  event: RelayEvent,
+  allowedChannelIds?: ReadonlySet<string>,
+): NamedThread[] {
+  return upsertNamedThreadTitleStateEvent(
+    threads,
+    event,
+    allowedChannelIds,
+  ).filter((thread) => thread.title.length > 0);
 }
 
 export function applyNamedThreadActivity(
@@ -226,7 +287,9 @@ export function namedThreadsForChannel(
   limit = MAX_NAMED_THREADS_PER_CHANNEL,
 ): NamedThread[] {
   return threads
-    .filter((thread) => thread.channelId === channelId)
+    .filter(
+      (thread) => thread.channelId === channelId && thread.title.length > 0,
+    )
     .sort(
       (left, right) =>
         right.lastActivityAt - left.lastActivityAt ||

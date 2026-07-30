@@ -4,12 +4,11 @@ import { toast } from "sonner";
 
 import type { TimelineMessage } from "@/features/messages/types";
 import {
-  deriveFallbackThreadTitle,
-  explicitThreadTitleFromTags,
   MAX_THREAD_TITLE_LENGTH,
+  resolveThreadDisplayTitle,
 } from "@/features/threads/namedThreads";
 import {
-  useNamedThreadsQuery,
+  useNamedThreadStatesQuery,
   useSetThreadTitle,
 } from "@/features/threads/hooks";
 import { AuxiliaryPanelTitle } from "@/shared/layout/AuxiliaryPanel";
@@ -27,21 +26,17 @@ export function ThreadTitleEditor({
   currentPubkey?: string;
   threadHead: TimelineMessage;
 }) {
-  const setThreadTitle = useSetThreadTitle(currentPubkey);
+  const setThreadTitle = useSetThreadTitle();
   const titleChannelIds = React.useMemo(() => [channelId], [channelId]);
-  const persistedTitle = useNamedThreadsQuery(
+  const persistedTitleState = useNamedThreadStatesQuery(
     titleChannelIds,
     currentPubkey,
-  ).find((thread) => thread.rootId === threadHead.id)?.title;
-  const [savedTitle, setSavedTitle] = React.useState<string | null | undefined>(
-    undefined,
+  ).find((thread) => thread.rootId === threadHead.id);
+  const displayTitle = resolveThreadDisplayTitle(
+    threadHead.body,
+    threadHead.tags,
+    persistedTitleState,
   );
-  const explicitTitle =
-    savedTitle !== undefined
-      ? savedTitle
-      : (persistedTitle ?? explicitThreadTitleFromTags(threadHead.tags));
-  const displayTitle =
-    explicitTitle ?? deriveFallbackThreadTitle(threadHead.body);
   const [isEditing, setIsEditing] = React.useState(false);
   const [draft, setDraft] = React.useState(displayTitle);
   const [isSaving, setIsSaving] = React.useState(false);
@@ -58,12 +53,11 @@ export function ThreadTitleEditor({
     if (isSaving) return;
     setIsSaving(true);
     try {
-      const saved = await setThreadTitle({
+      await setThreadTitle({
         channelId,
         rootId: threadHead.id,
         title: draft,
       });
-      setSavedTitle(saved || null);
       setIsEditing(false);
     } catch (error) {
       toast.error("Could not rename thread", {

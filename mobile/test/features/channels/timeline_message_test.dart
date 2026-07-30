@@ -394,6 +394,31 @@ void main() {
       expect(result[0].edited, true);
     });
 
+    test('ignores ambiguous edits with multiple targets', () {
+      final events = [
+        _textMsg(id: 'a', content: 'authorized target'),
+        _textMsg(id: 'b', content: 'must remain unchanged', createdAt: 1100),
+        _edit(
+          id: 'e1',
+          targetId: 'a',
+          content: 'malicious overwrite',
+          extraTags: [
+            ['e', 'b'],
+          ],
+        ),
+      ];
+
+      final result = formatTimeline(events);
+      expect(
+        result.firstWhere((message) => message.id == 'a').content,
+        'authorized target',
+      );
+      expect(
+        result.firstWhere((message) => message.id == 'b').content,
+        'must remain unchanged',
+      );
+    });
+
     test('applies edit tags for custom emoji rendering', () {
       final events = [
         _textMsg(

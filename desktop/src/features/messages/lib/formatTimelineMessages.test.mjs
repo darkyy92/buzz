@@ -171,6 +171,133 @@ test("legacy marked kind-40003 updates both body and thread title", () => {
   );
 });
 
+test("invalid title shapes never create explicit title metadata while body edits still apply", () => {
+  const invalidTitleEdits = [
+    streamEdit(HEX64_A, "unmarked body", {
+      id: "c".repeat(64),
+      tags: [
+        ["h", CHANNEL_ID],
+        ["e", HEX64_A],
+        ["subject", "Unmarked title"],
+      ],
+    }),
+    streamEdit(HEX64_A, "duplicate subject body", {
+      id: "d".repeat(64),
+      created_at: 1_700_000_002,
+      tags: [
+        ["h", CHANNEL_ID],
+        ["e", HEX64_A],
+        ["subject", "First title"],
+        ["subject", "Second title"],
+        ["t", "buzz-thread-title"],
+      ],
+    }),
+    streamEdit(HEX64_A, "duplicate marker body", {
+      id: "e".repeat(64),
+      created_at: 1_700_000_003,
+      tags: [
+        ["h", CHANNEL_ID],
+        ["e", HEX64_A],
+        ["subject", "Duplicate marker title"],
+        ["t", "buzz-thread-title"],
+        ["t", "buzz-thread-title"],
+      ],
+    }),
+  ];
+
+  const [message] = formatTimelineMessages(
+    [streamMessage(), ...invalidTitleEdits],
+    null,
+    undefined,
+    null,
+  );
+  assert.equal(message.body, "duplicate marker body");
+  assert.equal(
+    message.tags.some((tag) => tag[0] === "subject"),
+    false,
+  );
+});
+
+test("nonempty kind-40009 and reply-targeted titles are ignored", () => {
+  const root = streamMessage();
+  const replyId = "c".repeat(64);
+  const reply = streamMessage({
+    id: replyId,
+    content: "reply body",
+    tags: [
+      ["h", CHANNEL_ID],
+      ["e", HEX64_A, "", "reply"],
+    ],
+  });
+  const nonemptyTitle = streamEdit(HEX64_A, "not metadata-only", {
+    id: "d".repeat(64),
+    kind: 40009,
+    tags: [
+      ["h", CHANNEL_ID],
+      ["e", HEX64_A],
+      ["subject", "Invalid nonempty title"],
+      ["t", "buzz-thread-title"],
+    ],
+  });
+  const nestedTitle = streamEdit(replyId, "", {
+    id: "e".repeat(64),
+    kind: 40009,
+    created_at: 1_700_000_002,
+    tags: [
+      ["h", CHANNEL_ID],
+      ["e", replyId],
+      ["subject", "Invalid nested title"],
+      ["t", "buzz-thread-title"],
+    ],
+  });
+
+  const messages = formatTimelineMessages(
+    [root, reply, nonemptyTitle, nestedTitle],
+    null,
+    undefined,
+    null,
+  );
+  for (const message of messages) {
+    assert.equal(
+      message.tags.some((tag) => tag[0] === "subject"),
+      false,
+    );
+  }
+});
+
+test("ambiguous legacy edit cannot mutate the unauthorized last target", () => {
+  const authorized = streamMessage({
+    id: HEX64_A,
+    content: "authorized target",
+  });
+  const unauthorized = streamMessage({
+    id: "c".repeat(64),
+    content: "must remain unchanged",
+  });
+  const ambiguousEdit = streamEdit(HEX64_A, "malicious overwrite", {
+    tags: [
+      ["h", CHANNEL_ID],
+      ["e", HEX64_A],
+      ["e", unauthorized.id],
+    ],
+  });
+
+  const messages = formatTimelineMessages(
+    [authorized, unauthorized, ambiguousEdit],
+    null,
+    undefined,
+    null,
+  );
+  assert.equal(
+    messages.find((message) => message.id === HEX64_A)?.body,
+    "authorized target",
+  );
+  assert.equal(
+    messages.find((message) => message.id === unauthorized.id)?.body,
+    "must remain unchanged",
+  );
+});
+
 test("a far-future deletion still hides an old message", () => {
   const old = streamMessage({ created_at: 1_700_000_000 });
   const lateDeletion = deletionEvent(9005, HEX64_A, {

@@ -220,6 +220,146 @@ async fn test_agent_can_self_edit_message() {
     agent_client.disconnect().await.ok();
 }
 
+/// A multi-target edit cannot authorize against the first event while clients
+/// apply it to a different last event.
+#[tokio::test]
+#[ignore]
+async fn test_multi_target_edit_is_rejected_before_authorization() {
+    let attacker_keys = Keys::generate();
+    let victim_keys = Keys::generate();
+    let channel_id = create_agent_owned_channel(&attacker_keys).await;
+
+    let mut attacker_client = BuzzTestClient::connect(&relay_url(), &attacker_keys)
+        .await
+        .expect("connect attacker");
+    let own = attacker_client
+        .send_text_message(&attacker_keys, &channel_id, "authorized target", 9)
+        .await
+        .expect("send attacker message");
+    assert!(own.accepted, "attacker message rejected: {}", own.message);
+
+    let mut victim_client = BuzzTestClient::connect(&relay_url(), &victim_keys)
+        .await
+        .expect("connect victim");
+    let victim = victim_client
+        .send_text_message(&victim_keys, &channel_id, "protected target", 9)
+        .await
+        .expect("send victim message");
+    assert!(
+        victim.accepted,
+        "victim message rejected: {}",
+        victim.message
+    );
+
+    let ambiguous_edit = EventBuilder::new(Kind::Custom(40003), "malicious overwrite")
+        .tags(vec![
+            Tag::parse(["h", &channel_id]).unwrap(),
+            Tag::parse(["e", &own.event_id]).unwrap(),
+            Tag::parse(["e", &victim.event_id]).unwrap(),
+        ])
+        .sign_with_keys(&attacker_keys)
+        .unwrap();
+    let result = attacker_client
+        .send_event(ambiguous_edit)
+        .await
+        .expect("send ambiguous edit");
+    assert!(
+        !result.accepted,
+        "multi-target edit must be rejected before any target is authorized"
+    );
+
+    attacker_client.disconnect().await.ok();
+    victim_client.disconnect().await.ok();
+}
+
+/// Thread titles accept roots (including valid legacy kind:40003 titles) and
+/// reject replies, so clients never create phantom nested thread rows.
+#[tokio::test]
+#[ignore]
+async fn test_thread_title_requires_true_root_and_keeps_legacy_compatibility() {
+    let keys = Keys::generate();
+    let channel_id = create_agent_owned_channel(&keys).await;
+    let mut client = BuzzTestClient::connect(&relay_url(), &keys)
+        .await
+        .expect("connect author");
+
+    let root = client
+        .send_text_message(&keys, &channel_id, "thread root", 9)
+        .await
+        .expect("send root");
+    assert!(root.accepted, "root rejected: {}", root.message);
+
+    let reply_event = EventBuilder::new(Kind::Custom(9), "reply")
+        .tags(vec![
+            Tag::parse(["h", &channel_id]).unwrap(),
+            Tag::parse(["e", &root.event_id, "", "reply"]).unwrap(),
+        ])
+        .sign_with_keys(&keys)
+        .unwrap();
+    let reply = client.send_event(reply_event).await.expect("send reply");
+    assert!(reply.accepted, "reply rejected: {}", reply.message);
+
+    let reply_title = EventBuilder::new(Kind::Custom(40009), "")
+        .tags(vec![
+            Tag::parse(["h", &channel_id]).unwrap(),
+            Tag::parse(["e", &reply.event_id]).unwrap(),
+            Tag::parse(["subject", "Nested phantom"]).unwrap(),
+            Tag::parse(["t", "buzz-thread-title"]).unwrap(),
+        ])
+        .sign_with_keys(&keys)
+        .unwrap();
+    let rejected = client
+        .send_event(reply_title)
+        .await
+        .expect("send reply title");
+    assert!(
+        !rejected.accepted,
+        "title targeting a reply must be rejected"
+    );
+
+    // The first reply materializes a depth-0 thread_metadata row for the root.
+    // Renaming the root must still succeed after that row exists.
+    let root_title = EventBuilder::new(Kind::Custom(40009), "")
+        .tags(vec![
+            Tag::parse(["h", &channel_id]).unwrap(),
+            Tag::parse(["e", &root.event_id]).unwrap(),
+            Tag::parse(["subject", "Root renamed after reply"]).unwrap(),
+            Tag::parse(["t", "buzz-thread-title"]).unwrap(),
+        ])
+        .sign_with_keys(&keys)
+        .unwrap();
+    let renamed = client
+        .send_event(root_title)
+        .await
+        .expect("rename root after reply");
+    assert!(
+        renamed.accepted,
+        "root rename after reply rejected: {}",
+        renamed.message
+    );
+
+    let legacy_title = EventBuilder::new(Kind::Custom(40003), "updated root body")
+        .tags(vec![
+            Tag::parse(["h", &channel_id]).unwrap(),
+            Tag::parse(["e", &root.event_id]).unwrap(),
+            Tag::parse(["subject", "Legacy compatible title"]).unwrap(),
+            Tag::parse(["t", "buzz-thread-title"]).unwrap(),
+        ])
+        .sign_with_keys(&keys)
+        .unwrap();
+    let accepted = client
+        .send_event(legacy_title)
+        .await
+        .expect("send legacy title");
+    assert!(
+        accepted.accepted,
+        "valid legacy combined edit rejected: {}",
+        accepted.message
+    );
+
+    client.disconnect().await.ok();
+}
+
 // ─── kind:9005 DELETE_EVENT ─────────────────────────────────────────────────
 
 /// Owner can delete a message authored by their agent via kind:9005.

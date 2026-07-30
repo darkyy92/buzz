@@ -4,33 +4,29 @@ import { useLocation } from "@tanstack/react-router";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import {
-  applyNamedThreadActivity,
-  NAMED_THREAD_QUERY_LIMIT,
-  normalizeThreadTitle,
-  reduceNamedThreadTitleEdits,
   THREAD_TITLE_MARKER,
   type NamedThread,
-  upsertNamedThreadTitleEvent,
+  upsertNamedThreadTitleStateEvent,
 } from "@/features/threads/namedThreads";
+import {
+  applyNamedThreadSnapshotActivity,
+  fetchNamedThreadActivityCatchUp,
+  isLiveNamedThreadTitleTargetValid,
+  loadNamedThreadsForChannels,
+  type NamedThreadLoadSnapshot,
+  namedThreadActivityTargetKey,
+  namedThreadActivityTargetsFromKey,
+  preserveNewerNamedThreadState,
+  THREAD_TITLE_EVENT_KINDS,
+} from "@/features/threads/namedThreadLoading";
 import { relayClient } from "@/shared/api/relayClient";
 import { setThreadTitle } from "@/shared/api/tauri";
-import type { Channel, RelayEvent } from "@/shared/api/types";
+import type { Channel } from "@/shared/api/types";
+import { CHANNEL_MESSAGE_EVENT_KINDS } from "@/shared/constants/kinds";
 import {
-  CHANNEL_MESSAGE_EVENT_KINDS,
-  KIND_STREAM_MESSAGE_EDIT,
-  KIND_STREAM_THREAD_TITLE,
-} from "@/shared/constants/kinds";
-
-const THREAD_TITLE_EVENT_KINDS = [
-  KIND_STREAM_THREAD_TITLE,
-  KIND_STREAM_MESSAGE_EDIT,
-] as const;
-
-type SetThreadTitleInput = {
-  channelId: string;
-  rootId: string;
-  title: string;
-};
+  persistThreadTitle,
+  type SetThreadTitleInput,
+} from "@/features/threads/threadTitlePersistence";
 
 function namedThreadsQueryKey(channelIds: string[], currentPubkey?: string) {
   return [
@@ -40,7 +36,7 @@ function namedThreadsQueryKey(channelIds: string[], currentPubkey?: string) {
   ] as const;
 }
 
-export function useNamedThreadsQuery(
+export function useNamedThreadStatesQuery(
   channelIds: string[],
   currentPubkey?: string,
 ): NamedThread[] {
@@ -57,42 +53,51 @@ export function useNamedThreadsQuery(
     () => namedThreadsQueryKey(normalizedChannelIds, currentPubkey),
     [currentPubkey, normalizedChannelIds],
   );
-  const query = useQuery({
+  const query = useQuery<NamedThreadLoadSnapshot>({
     enabled: normalizedChannelIds.length > 0,
     queryKey,
-    queryFn: async (): Promise<NamedThread[]> => {
-      const titleEvents = await relayClient.fetchEvents({
-        // 40009 is the metadata-only protocol. 40003 remains in the query so
-        // SDK-era combined body+subject edits keep their persisted titles.
-        kinds: [...THREAD_TITLE_EVENT_KINDS],
-        "#h": normalizedChannelIds,
-        "#t": [THREAD_TITLE_MARKER],
-        limit: NAMED_THREAD_QUERY_LIMIT,
-      });
-      const titledThreads = reduceNamedThreadTitleEdits(
-        titleEvents,
-        allowedChannelIds,
-      );
-      if (titledThreads.length === 0) return [];
-      const replyEvents = await relayClient.fetchEvents({
-        kinds: [...CHANNEL_MESSAGE_EVENT_KINDS],
-        "#e": titledThreads.map((thread) => thread.rootId),
-        limit: NAMED_THREAD_QUERY_LIMIT,
-      });
-      return applyNamedThreadActivity(
-        titledThreads,
-        replyEvents,
+    queryFn: () => {
+      const knownThreads =
+        queryClient.getQueryData<NamedThreadLoadSnapshot>(queryKey)?.threads ??
+        [];
+      return loadNamedThreadsForChannels(
+        normalizedChannelIds,
         currentPubkey,
+        undefined,
+        knownThreads,
       );
+    },
+    structuralSharing: (previous, loaded) => {
+      const incoming = loaded as NamedThreadLoadSnapshot;
+      return {
+        ...incoming,
+        threads: preserveNewerNamedThreadState(
+          (previous as NamedThreadLoadSnapshot | undefined)?.threads,
+          incoming.threads,
+          incoming.invalidRootStates,
+        ),
+      };
     },
     staleTime: 30_000,
     refetchInterval: 120_000,
   });
 
-  const namedThreads = query.data ?? [];
-  const rootIds = React.useMemo(
-    () => namedThreads.map((thread) => thread.rootId).sort(),
+  const titleStates = query.data?.threads ?? [];
+  const namedThreads = React.useMemo(
+    () => titleStates.filter((thread) => thread.title.length > 0),
+    [titleStates],
+  );
+  const activityTargetKey = React.useMemo(
+    () => namedThreadActivityTargetKey(namedThreads),
     [namedThreads],
+  );
+  const activityTargets = React.useMemo(
+    () => namedThreadActivityTargetsFromKey(activityTargetKey),
+    [activityTargetKey],
+  );
+  const rootIds = React.useMemo(
+    () => activityTargets.map((target) => target.rootId),
+    [activityTargets],
   );
 
   React.useEffect(() => {
@@ -108,9 +113,25 @@ export function useNamedThreadsQuery(
           limit: 0,
         },
         (event) => {
-          queryClient.setQueryData<NamedThread[]>(queryKey, (old = []) =>
-            upsertNamedThreadTitleEvent(old, event, allowedChannelIds),
-          );
+          void isLiveNamedThreadTitleTargetValid(event, allowedChannelIds)
+            .then((isValid) => {
+              if (!isValid || disposed) return;
+              queryClient.setQueryData<NamedThreadLoadSnapshot>(
+                queryKey,
+                (old) => ({
+                  threads: upsertNamedThreadTitleStateEvent(
+                    old?.threads ?? [],
+                    event,
+                    allowedChannelIds,
+                  ),
+                  authoritativeChannelIds: old?.authoritativeChannelIds ?? [],
+                  invalidRootStates: old?.invalidRootStates ?? [],
+                }),
+              );
+            })
+            .catch((error) => {
+              console.error("Failed to validate named thread root", error);
+            });
         },
       )
       .then((dispose) => {
@@ -118,6 +139,10 @@ export function useNamedThreadsQuery(
           void dispose();
         } else {
           unsubscribe = dispose;
+          // Close the history-before-subscription race: anything published
+          // after the first history request began is now covered either by
+          // this live subscription or by the catch-up refetch.
+          void queryClient.invalidateQueries({ queryKey });
         }
       })
       .catch((error) => {
@@ -141,8 +166,8 @@ export function useNamedThreadsQuery(
           limit: 0,
         },
         (event) => {
-          queryClient.setQueryData<NamedThread[]>(queryKey, (old = []) =>
-            applyNamedThreadActivity(old, [event], currentPubkey),
+          queryClient.setQueryData<NamedThreadLoadSnapshot>(queryKey, (old) =>
+            applyNamedThreadSnapshotActivity(old, [event], currentPubkey),
           );
         },
       )
@@ -151,6 +176,21 @@ export function useNamedThreadsQuery(
           void dispose();
         } else {
           unsubscribe = dispose;
+          // Merge the history-before-subscription catch-up monotonically.
+          // Invalidating the whole query here can overwrite a newer live
+          // reply when the relay's history view is briefly behind.
+          void fetchNamedThreadActivityCatchUp(activityTargets)
+            .then((events) => {
+              if (disposed) return;
+              queryClient.setQueryData<NamedThreadLoadSnapshot>(
+                queryKey,
+                (old) =>
+                  applyNamedThreadSnapshotActivity(old, events, currentPubkey),
+              );
+            })
+            .catch((error) => {
+              console.error("Failed to catch up named thread activity", error);
+            });
         }
       })
       .catch((error) => {
@@ -160,7 +200,7 @@ export function useNamedThreadsQuery(
       disposed = true;
       void unsubscribe?.();
     };
-  }, [currentPubkey, queryClient, queryKey, rootIds]);
+  }, [activityTargets, currentPubkey, queryClient, queryKey, rootIds]);
 
   React.useEffect(
     () =>
@@ -170,38 +210,30 @@ export function useNamedThreadsQuery(
     [queryClient, queryKey],
   );
 
-  return namedThreads;
+  return titleStates;
 }
 
-export function useSetThreadTitle(currentPubkey?: string) {
+export function useNamedThreadsQuery(
+  channelIds: string[],
+  currentPubkey?: string,
+): NamedThread[] {
+  const titleStates = useNamedThreadStatesQuery(channelIds, currentPubkey);
+  return React.useMemo(
+    () => titleStates.filter((thread) => thread.title.length > 0),
+    [titleStates],
+  );
+}
+
+export function useSetThreadTitle() {
   const queryClient = useQueryClient();
   return React.useCallback(
-    async (input: SetThreadTitleInput): Promise<string> => {
-      const title = normalizeThreadTitle(input.title);
-      await setThreadTitle(input.channelId, input.rootId, title);
-
-      const syntheticEvent: RelayEvent = {
-        id: `local-thread-title-${crypto.randomUUID()}`,
-        pubkey: currentPubkey ?? "",
-        created_at: Math.floor(Date.now() / 1_000),
-        kind: KIND_STREAM_THREAD_TITLE,
-        tags: [
-          ["h", input.channelId],
-          ["e", input.rootId],
-          ["subject", title],
-          ["t", THREAD_TITLE_MARKER],
-        ],
-        content: "",
-        sig: "",
-      };
-      queryClient.setQueriesData<NamedThread[]>(
-        { queryKey: ["named-threads"] },
-        (old = []) => upsertNamedThreadTitleEvent(old, syntheticEvent),
-      );
-      void queryClient.invalidateQueries({ queryKey: ["named-threads"] });
-      return title;
-    },
-    [currentPubkey, queryClient],
+    (input: SetThreadTitleInput): Promise<string> =>
+      persistThreadTitle(input, {
+        persist: setThreadTitle,
+        refresh: () =>
+          queryClient.invalidateQueries({ queryKey: ["named-threads"] }),
+      }),
+    [queryClient],
   );
 }
 

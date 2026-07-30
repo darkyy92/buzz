@@ -336,7 +336,7 @@ List<TimelineMessage> formatTimeline(
     if (event.kind != EventKind.streamMessageEdit) continue;
     if (deletedIds.contains(event.id)) continue;
 
-    final targetId = _lastETag(event.tags);
+    final targetId = _singleETag(event.tags);
     if (targetId == null || deletedIds.contains(targetId)) continue;
 
     final existing = edits[targetId];
@@ -569,6 +569,13 @@ String? _lastETag(List<List<String>> tags) {
     if (tag.length >= 2 && tag[0] == 'e') return tag[1];
   }
   return null;
+}
+
+/// Resolve the relay-authorized edit target: exactly one `e` tag.
+String? _singleETag(List<List<String>> tags) {
+  final eventTags = tags.where((tag) => tag.length >= 2 && tag[0] == 'e');
+  if (eventTags.length != 1) return null;
+  return eventTags.single[1];
 }
 
 String? _readString(Map<dynamic, dynamic> json, String key) {

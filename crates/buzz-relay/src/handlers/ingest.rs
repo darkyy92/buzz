@@ -774,31 +774,44 @@ pub(crate) fn effective_message_author(event: &Event, relay_pubkey: &nostr::Publ
     event.pubkey.to_bytes().to_vec()
 }
 
+#[derive(Clone, Copy)]
+enum EditTargetPolicy {
+    AnyMessage,
+    ThreadRoot,
+}
+
+fn single_edit_target_hex(event: &Event) -> Result<String, String> {
+    let mut targets = event
+        .tags
+        .iter()
+        .filter(|tag| tag.kind().to_string() == "e");
+    let target = targets
+        .next()
+        .ok_or_else(|| "edit event must reference exactly one target".to_string())?;
+    if targets.next().is_some() {
+        return Err("edit event must reference exactly one target".to_string());
+    }
+
+    let target_hex = target
+        .content()
+        .filter(|value| value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit()))
+        .ok_or_else(|| "invalid edit target event ID".to_string())?;
+    Ok(target_hex.to_string())
+}
+
+fn thread_metadata_is_root(parent_event_id: Option<&[u8]>, depth: i32) -> bool {
+    parent_event_id.is_none() && depth == 0
+}
+
 /// Validate message-mutation ownership — event.pubkey must match target's effective author,
 /// or the actor must be the owning human of the agent that authored the target message.
 async fn validate_edit_ownership(
     community_id: CommunityId,
     event: &Event,
     state: &AppState,
-    validate_target: fn(&Event) -> Result<(), String>,
+    target_policy: EditTargetPolicy,
 ) -> Result<(), String> {
-    let target_hex = event
-        .tags
-        .iter()
-        .find_map(|t| {
-            if t.kind().to_string() == "e" {
-                t.content().and_then(|v| {
-                    if v.len() == 64 && v.chars().all(|c| c.is_ascii_hexdigit()) {
-                        Some(v.to_string())
-                    } else {
-                        None
-                    }
-                })
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| "missing e tag for edit target".to_string())?;
+    let target_hex = single_edit_target_hex(event)?;
 
     let target_bytes =
         hex::decode(&target_hex).map_err(|_| "invalid target event ID".to_string())?;
@@ -808,7 +821,19 @@ async fn validate_edit_ownership(
         .await
         .map_err(|e| format!("db error: {e}"))?
         .ok_or_else(|| "edit target event not found".to_string())?;
-    validate_target(&target_event.event)?;
+    if matches!(target_policy, EditTargetPolicy::ThreadRoot) {
+        validate_thread_title_target(&target_event.event)?;
+        if let Some(metadata) = state
+            .db
+            .get_thread_metadata_by_event(community_id, &target_bytes)
+            .await
+            .map_err(|e| format!("db error checking thread root: {e}"))?
+        {
+            if !thread_metadata_is_root(metadata.parent_event_id.as_deref(), metadata.depth) {
+                return Err("thread title target must be a thread root".to_string());
+            }
+        }
+    }
 
     // Verify target belongs to the same channel as the edit event.
     let edit_channel_id = extract_channel_id(event);
@@ -860,26 +885,35 @@ async fn validate_edit_ownership(
 
 const THREAD_TITLE_MARKER: &str = "buzz-thread-title";
 
-fn allow_message_edit_target(_: &Event) -> Result<(), String> {
-    Ok(())
+fn is_thread_title_event(event: &Event) -> bool {
+    event_kind_u32(event) == KIND_STREAM_THREAD_TITLE
+        || event
+            .tags
+            .iter()
+            .any(|tag| tag.kind().to_string() == "t" && tag.content() == Some(THREAD_TITLE_MARKER))
 }
 
 fn validate_thread_title_target(target: &Event) -> Result<(), String> {
     match event_kind_u32(target) {
-        KIND_STREAM_MESSAGE | KIND_STREAM_MESSAGE_V2 | KIND_FORUM_POST | KIND_FORUM_COMMENT => {
-            Ok(())
+        KIND_STREAM_MESSAGE | KIND_STREAM_MESSAGE_V2 | KIND_FORUM_POST => {}
+        _ => {
+            return Err("thread title target must be a supported thread-head message".to_string());
         }
-        _ => Err("thread title target must be a supported thread-head message".to_string()),
     }
+    if target.tags.iter().any(|tag| {
+        let parts = tag.as_slice();
+        parts.len() >= 4 && parts[0] == "e" && (parts[3] == "root" || parts[3] == "reply")
+    }) {
+        return Err("thread title target must be a thread root".to_string());
+    }
+    Ok(())
 }
 
 fn validate_thread_title_event(event: &Event) -> Result<(), String> {
-    if !event.content.is_empty() {
+    if event_kind_u32(event) == KIND_STREAM_THREAD_TITLE && !event.content.is_empty() {
         return Err("thread title event content must be empty".to_string());
     }
-    if count_e_tags(event) != 1 {
-        return Err("thread title event must reference exactly one target".to_string());
-    }
+    single_edit_target_hex(event)?;
 
     let mut subjects = event
         .tags
@@ -895,12 +929,13 @@ fn validate_thread_title_event(event: &Event) -> Result<(), String> {
     if subject.chars().count() > 80 {
         return Err("thread title exceeds maximum length of 80 characters".to_string());
     }
-    if !event
+    let marker_count = event
         .tags
         .iter()
-        .any(|tag| tag.kind().to_string() == "t" && tag.content() == Some(THREAD_TITLE_MARKER))
-    {
-        return Err("thread title event is missing its protocol marker".to_string());
+        .filter(|tag| tag.kind().to_string() == "t" && tag.content() == Some(THREAD_TITLE_MARKER))
+        .count();
+    if marker_count != 1 {
+        return Err("thread title event must include exactly one protocol marker".to_string());
     }
     Ok(())
 }
@@ -2056,7 +2091,14 @@ async fn ingest_event_inner(
     }
 
     if kind_u32 == KIND_STREAM_MESSAGE_EDIT {
-        validate_edit_ownership(tenant.community(), &event, state, allow_message_edit_target)
+        let target_policy = if is_thread_title_event(&event) {
+            validate_thread_title_event(&event)
+                .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+            EditTargetPolicy::ThreadRoot
+        } else {
+            EditTargetPolicy::AnyMessage
+        };
+        validate_edit_ownership(tenant.community(), &event, state, target_policy)
             .await
             .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
     }
@@ -2068,7 +2110,7 @@ async fn ingest_event_inner(
             tenant.community(),
             &event,
             state,
-            validate_thread_title_target,
+            EditTargetPolicy::ThreadRoot,
         )
         .await
         .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
@@ -3211,6 +3253,98 @@ mod tests {
             ],
         );
         assert!(validate_thread_title_event(&event).is_err());
+    }
+
+    #[test]
+    fn edit_target_validation_rejects_ambiguous_or_malformed_targets() {
+        let first = "a".repeat(64);
+        let second = "b".repeat(64);
+        let ambiguous = make_event_with_tags(
+            KIND_STREAM_MESSAGE_EDIT,
+            "overwrite",
+            &[&["e", &first], &["e", &second]],
+        );
+        assert!(single_edit_target_hex(&ambiguous).is_err());
+
+        let malformed = make_event_with_tags(
+            KIND_STREAM_MESSAGE_EDIT,
+            "overwrite",
+            &[&["e", "not-an-event-id"]],
+        );
+        assert!(single_edit_target_hex(&malformed).is_err());
+    }
+
+    #[test]
+    fn thread_metadata_distinguishes_materialized_root_from_reply() {
+        assert!(
+            thread_metadata_is_root(None, 0),
+            "a root keeps depth-0 metadata after replies materialize its counters"
+        );
+        assert!(
+            !thread_metadata_is_root(Some(&[1; 32]), 1),
+            "a depth-1 row with a parent is a reply"
+        );
+        assert!(
+            !thread_metadata_is_root(None, 1),
+            "positive depth alone proves a reply even if metadata is incomplete"
+        );
+        assert!(
+            !thread_metadata_is_root(Some(&[1; 32]), 0),
+            "a parent alone proves a reply even if depth is corrupt"
+        );
+    }
+
+    #[test]
+    fn thread_title_validation_accepts_empty_subject_clear() {
+        let event = make_event_with_tags(
+            KIND_STREAM_THREAD_TITLE,
+            "",
+            &[
+                &[
+                    "e",
+                    "d24da132115ca0a46233cf4c2ad8338fbf914250cbcaa9181a6dd59533cb5ac1",
+                ],
+                &["subject", ""],
+                &["t", THREAD_TITLE_MARKER],
+            ],
+        );
+        assert!(validate_thread_title_event(&event).is_ok());
+    }
+
+    #[test]
+    fn legacy_marked_edit_keeps_body_and_title_compatibility() {
+        let event = make_event_with_tags(
+            KIND_STREAM_MESSAGE_EDIT,
+            "updated body",
+            &[
+                &[
+                    "e",
+                    "d24da132115ca0a46233cf4c2ad8338fbf914250cbcaa9181a6dd59533cb5ac1",
+                ],
+                &["subject", "Legacy title"],
+                &["t", THREAD_TITLE_MARKER],
+            ],
+        );
+        assert!(is_thread_title_event(&event));
+        assert!(validate_thread_title_event(&event).is_ok());
+    }
+
+    #[test]
+    fn thread_title_target_validation_rejects_reply_messages() {
+        let reply = make_event_with_tags(
+            KIND_STREAM_MESSAGE,
+            "reply",
+            &[&[
+                "e",
+                "d24da132115ca0a46233cf4c2ad8338fbf914250cbcaa9181a6dd59533cb5ac1",
+                "",
+                "reply",
+            ]],
+        );
+        assert!(validate_thread_title_target(&reply).is_err());
+
+        let forum_comment = make_event_with_tags(KIND_FORUM_COMMENT, "comment", &[]);
+        assert!(validate_thread_title_target(&forum_comment).is_err());
     }
 
     #[test]
