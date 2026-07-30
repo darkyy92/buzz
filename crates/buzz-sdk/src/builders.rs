@@ -5,9 +5,9 @@
 
 use buzz_core::{
     kind::{
-        KIND_AGENT_OBSERVER_FRAME, KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_DELETION,
-        KIND_DM_ADD_MEMBER, KIND_DM_OPEN, KIND_EMOJI_SET, KIND_GIT_ISSUE, KIND_GIT_PATCH,
-        KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST, KIND_GIT_REPO_ANNOUNCEMENT,
+        KIND_AGENT_OBSERVER_FRAME, KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_APP_DATA,
+        KIND_DELETION, KIND_DM_ADD_MEMBER, KIND_DM_OPEN, KIND_EMOJI_SET, KIND_GIT_ISSUE,
+        KIND_GIT_PATCH, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST, KIND_GIT_REPO_ANNOUNCEMENT,
         KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT, KIND_GIT_STATUS_MERGED,
         KIND_GIT_STATUS_OPEN, KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST,
         KIND_MODERATION_BAN, KIND_MODERATION_RESOLVE_REPORT, KIND_MODERATION_TIMEOUT,
@@ -23,7 +23,11 @@ use nostr::{EventBuilder, Kind, Tag};
 use uuid::Uuid;
 
 use crate::{
-    ChannelKind, CustomEmoji, DiffMeta, MemberRole, SdkError, ThreadRef, Visibility, VoteDirection,
+    AgentCommandCatalog, AgentSlashCommand, ChannelKind, CustomEmoji, DiffMeta, MemberRole,
+    SdkError, ThreadRef, Visibility, VoteDirection, AGENT_COMMAND_CATALOG_D_TAG,
+    AGENT_COMMAND_CATALOG_MAX_COMMANDS, AGENT_COMMAND_CATALOG_MAX_CONTENT_BYTES,
+    AGENT_COMMAND_CATALOG_T_TAG, AGENT_COMMAND_CATALOG_VERSION,
+    AGENT_COMMAND_DESCRIPTION_MAX_CHARS,
 };
 
 /// Parse a tag slice, mapping errors to `SdkError::InvalidTag`.
@@ -523,6 +527,79 @@ pub fn build_custom_emoji_set(emojis: &[CustomEmoji]) -> Result<EventBuilder, Sd
         tags.push(tag(&["emoji", &shortcode, &emoji.url])?);
     }
     Ok(EventBuilder::new(Kind::Custom(KIND_EMOJI_SET as u16), "").tags(tags))
+}
+
+/// Build an agent-authored slash-command catalog (NIP-78 kind:30078).
+///
+/// The event is parameterized-replaceable at
+/// `(agent pubkey, 30078, "buzz:agent-commands:v1")`; `commands` is the
+/// complete list, so publishing an empty list clears the prior catalog.
+pub fn build_agent_command_catalog(
+    catalog: &AgentCommandCatalog,
+) -> Result<EventBuilder, SdkError> {
+    const MAX_NAME_BYTES: usize = 128;
+
+    if catalog.version != AGENT_COMMAND_CATALOG_VERSION {
+        return Err(SdkError::InvalidInput(format!(
+            "agent command catalog version must be {AGENT_COMMAND_CATALOG_VERSION}"
+        )));
+    }
+    if catalog.commands.len() > AGENT_COMMAND_CATALOG_MAX_COMMANDS {
+        return Err(SdkError::InvalidInput(format!(
+            "agent command catalog exceeds {AGENT_COMMAND_CATALOG_MAX_COMMANDS} commands"
+        )));
+    }
+
+    let mut seen = std::collections::HashSet::with_capacity(catalog.commands.len());
+    let mut commands = Vec::with_capacity(catalog.commands.len());
+    for command in &catalog.commands {
+        let name = command.name.trim();
+        if name.is_empty()
+            || name.len() > MAX_NAME_BYTES
+            || name.starts_with('/')
+            || name
+                .chars()
+                .any(|character| character.is_whitespace() || character == '/')
+        {
+            return Err(SdkError::InvalidInput(format!(
+                "invalid agent command name: {:?}",
+                command.name
+            )));
+        }
+        if !seen.insert(name.to_lowercase()) {
+            return Err(SdkError::InvalidInput(format!(
+                "duplicate agent command name: {name}"
+            )));
+        }
+        let description = command
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                value
+                    .chars()
+                    .take(AGENT_COMMAND_DESCRIPTION_MAX_CHARS)
+                    .collect::<String>()
+            });
+        commands.push(AgentSlashCommand {
+            name: name.to_string(),
+            description,
+        });
+    }
+
+    let content = serde_json::to_string(&AgentCommandCatalog {
+        version: AGENT_COMMAND_CATALOG_VERSION,
+        commands,
+    })
+    .map_err(|error| SdkError::InvalidInput(format!("serialize command catalog: {error}")))?;
+    check_content(&content, AGENT_COMMAND_CATALOG_MAX_CONTENT_BYTES)?;
+    let tags = vec![
+        tag(&["d", AGENT_COMMAND_CATALOG_D_TAG])?,
+        tag(&["t", AGENT_COMMAND_CATALOG_T_TAG])?,
+        tag(&["-"])?,
+    ];
+    Ok(EventBuilder::new(Kind::Custom(KIND_APP_DATA as u16), content).tags(tags))
 }
 
 /// Build a canvas update event (kind 40100).
@@ -2313,6 +2390,107 @@ mod tests {
         assert_eq!(ev.kind.as_u16(), 30030);
         assert!(has_tag(&ev, "d", CUSTOM_EMOJI_SET_D_TAG));
         assert!(has_tag(&ev, "emoji", "party"));
+    }
+
+    #[test]
+    fn agent_command_catalog_is_versioned_signed_replaceable_data() {
+        let ev = sign(
+            build_agent_command_catalog(&AgentCommandCatalog {
+                version: AGENT_COMMAND_CATALOG_VERSION,
+                commands: vec![AgentSlashCommand {
+                    name: "review".into(),
+                    description: Some(" Review changes ".into()),
+                }],
+            })
+            .unwrap(),
+        );
+        assert_eq!(ev.kind.as_u16(), 30078);
+        assert!(has_tag(&ev, "d", AGENT_COMMAND_CATALOG_D_TAG));
+        assert!(has_tag(&ev, "t", AGENT_COMMAND_CATALOG_T_TAG));
+        assert!(ev.tags.iter().any(|tag| tag.as_slice() == ["-"]));
+        assert_eq!(
+            serde_json::from_str::<AgentCommandCatalog>(&ev.content).unwrap(),
+            AgentCommandCatalog {
+                version: AGENT_COMMAND_CATALOG_VERSION,
+                commands: vec![AgentSlashCommand {
+                    name: "review".into(),
+                    description: Some("Review changes".into()),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn agent_command_catalog_rejects_invalid_and_duplicate_names() {
+        for commands in [
+            vec![AgentSlashCommand {
+                name: "/review".into(),
+                description: None,
+            }],
+            vec![
+                AgentSlashCommand {
+                    name: "review".into(),
+                    description: None,
+                },
+                AgentSlashCommand {
+                    name: "REVIEW".into(),
+                    description: None,
+                },
+            ],
+        ] {
+            assert!(build_agent_command_catalog(&AgentCommandCatalog {
+                version: AGENT_COMMAND_CATALOG_VERSION,
+                commands,
+            })
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn agent_command_catalog_keeps_464_commands_and_caps_descriptions() {
+        let commands = (0..464)
+            .map(|index| AgentSlashCommand {
+                name: format!("command-{index}"),
+                description: Some(if index == 0 {
+                    "🧭".repeat(81)
+                } else {
+                    "x".repeat(80)
+                }),
+            })
+            .collect::<Vec<_>>();
+        let event = sign(
+            build_agent_command_catalog(&AgentCommandCatalog {
+                version: AGENT_COMMAND_CATALOG_VERSION,
+                commands,
+            })
+            .unwrap(),
+        );
+        let parsed = serde_json::from_str::<AgentCommandCatalog>(&event.content).unwrap();
+        assert_eq!(parsed.commands.len(), 464);
+        assert_eq!(
+            parsed.commands[0]
+                .description
+                .as_deref()
+                .unwrap()
+                .chars()
+                .count(),
+            AGENT_COMMAND_DESCRIPTION_MAX_CHARS
+        );
+    }
+
+    #[test]
+    fn agent_command_catalog_rejects_more_than_512_commands() {
+        let commands = (0..=AGENT_COMMAND_CATALOG_MAX_COMMANDS)
+            .map(|index| AgentSlashCommand {
+                name: format!("command-{index}"),
+                description: None,
+            })
+            .collect();
+        assert!(build_agent_command_catalog(&AgentCommandCatalog {
+            version: AGENT_COMMAND_CATALOG_VERSION,
+            commands,
+        })
+        .is_err());
     }
 
     #[test]

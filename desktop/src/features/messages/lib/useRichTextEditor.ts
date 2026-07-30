@@ -438,7 +438,10 @@ export function useRichTextEditor({
           addKeyboardShortcuts() {
             return {
               Enter: ({ editor: ed }) => {
-                if (isAutocompleteOpen?.current) return false;
+                // Consume Enter before StarterKit can split the paragraph.
+                // The React keydown bridge still receives the bubbling event
+                // and applies the selected autocomplete item.
+                if (isAutocompleteOpen?.current) return true;
                 if (!onSubmitRef.current) return false;
 
                 const fenceResult = handleCodeFenceEnter(ed);

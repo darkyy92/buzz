@@ -74,6 +74,40 @@ pub struct CustomEmoji {
     pub url: String,
 }
 
+/// Versioned NIP-78 `d` tag for an agent's slash-command capability manifest.
+pub const AGENT_COMMAND_CATALOG_D_TAG: &str = "buzz:agent-commands:v1";
+/// Discovery tag carried by agent command catalog events.
+pub const AGENT_COMMAND_CATALOG_T_TAG: &str = "buzz-agent-commands";
+/// Current JSON content schema version for agent command catalogs.
+pub const AGENT_COMMAND_CATALOG_VERSION: u8 = 1;
+/// Maximum number of commands in one complete agent catalog.
+pub const AGENT_COMMAND_CATALOG_MAX_COMMANDS: usize = 512;
+/// Maximum number of Unicode scalar values retained in a command description.
+pub const AGENT_COMMAND_DESCRIPTION_MAX_CHARS: usize = 80;
+/// Maximum serialized catalog content size accepted by the relay-facing builder.
+pub const AGENT_COMMAND_CATALOG_MAX_CONTENT_BYTES: usize = 64 * 1024;
+
+/// One slash command advertised by a native or managed agent.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentSlashCommand {
+    /// Command name without a leading slash or whitespace.
+    pub name: String,
+    /// Optional human-readable description shown in autocomplete (capped at 80 characters).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Versioned JSON content of an agent command catalog NIP-78 event.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentCommandCatalog {
+    /// Must equal [`AGENT_COMMAND_CATALOG_VERSION`].
+    pub version: u8,
+    /// Complete replacement list. An empty list clears the catalog.
+    pub commands: Vec<AgentSlashCommand>,
+}
+
 /// Return a channel name without client-rendered leading hash prefixes.
 pub use buzz_core::channel::canonical_channel_name;
 /// Channel type.

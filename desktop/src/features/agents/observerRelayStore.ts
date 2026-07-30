@@ -3,7 +3,7 @@ import * as React from "react";
 import { subscribeToAgentObserverFrames } from "@/shared/api/observerRelay";
 import type { RelayEvent, ManagedAgent } from "@/shared/api/types";
 import type { ControlResultFrame } from "@/shared/api/types";
-import { putAgentSessionConfig } from "@/shared/api/tauri";
+import { getRelayWsUrl, putAgentSessionConfig } from "@/shared/api/tauri";
 import { putManagedAgentRuntimeLifecycle } from "@/shared/api/tauriManagedAgents";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import { decryptObserverEvent } from "@/shared/api/tauriObserver";
@@ -14,6 +14,7 @@ import {
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { useQueryClient } from "@tanstack/react-query";
 import { agentConfigSurfaceQueryKey } from "@/features/agents/hooks";
+import { recordAvailableCommandsUpdate } from "./agentCommandCatalog";
 import type {
   ConnectionState,
   ObserverEvent,
@@ -168,6 +169,8 @@ let unsubscribeRelay: (() => Promise<void>) | null = null;
 let startPromise: Promise<void> | null = null;
 let eventProcessingQueue: Promise<void> = Promise.resolve();
 let generation = 0;
+let observerOwnerPubkey: string | null = null;
+let observerRelayUrl: string | null = null;
 
 function notifyListeners() {
   for (const listener of listeners) {
@@ -401,6 +404,17 @@ async function handleRelayObserverEvent(
     if (parsed.kind === "session_config_captured") {
       void putAgentSessionConfig(agentPubkey, parsed.payload);
       onSessionConfigCaptured?.(agentPubkey);
+    } else if (
+      parsed.kind === "available_commands_captured" &&
+      observerOwnerPubkey &&
+      observerRelayUrl
+    ) {
+      recordAvailableCommandsUpdate(
+        observerOwnerPubkey,
+        observerRelayUrl,
+        agentPubkey,
+        parsed,
+      );
     } else if (parsed.kind === "control_result") {
       dispatchControlResult(agentPubkey, parsed.payload);
     } else if (parsed.kind === "managed_agent_runtime_lifecycle") {
@@ -434,7 +448,15 @@ export function ensureRelayObserverSubscription() {
   const activeGeneration = generation;
   setConnectionState("connecting", null);
   startPromise = (async () => {
-    const identity = await getIdentity();
+    const [identity, relayUrl] = await Promise.all([
+      getIdentity(),
+      getRelayWsUrl(),
+    ]);
+    if (activeGeneration !== generation) {
+      return;
+    }
+    observerOwnerPubkey = normalizePubkey(identity.pubkey);
+    observerRelayUrl = relayUrl;
     const unsubscribe = await subscribeToAgentObserverFrames(
       identity.pubkey,
       (event) => {
@@ -654,14 +676,20 @@ export function useManagedAgentObserverBridge(
  * (e.g. an agent that is stopped but has archived history) are dropped.
  * The caller should ensure the agent is registered before calling.
  *
- * `_decryptFn` is only used by tests to inject a mock decryption function.
- * Production callers must always omit it.
+ * `_decryptFn`, `_ownerPubkeyFn`, and `_relayUrlFn` are only used by tests to
+ * inject mock functions. Production callers must always omit them.
  */
 export async function ingestArchivedObserverEvents(
   rawEvents: RelayEvent[],
   _decryptFn: (event: RelayEvent) => Promise<unknown> = decryptObserverEvent,
+  _ownerPubkeyFn: () => Promise<string> = async () =>
+    normalizePubkey((await getIdentity()).pubkey),
+  _relayUrlFn: () => Promise<string> = getRelayWsUrl,
 ): Promise<void> {
+  const activeGeneration = generation;
   let archiveChanged = false;
+  let archiveOwnerPubkey = observerOwnerPubkey;
+  let archiveRelayUrl = observerRelayUrl;
   for (const event of rawEvents) {
     const agentPubkey = observerTag(event, "agent");
     const frame = observerTag(event, "frame");
@@ -676,6 +704,18 @@ export async function ingestArchivedObserverEvents(
     }
     try {
       const parsed = (await _decryptFn(event)) as ObserverEvent;
+      if (activeGeneration !== generation) return;
+      if (parsed.kind === "available_commands_captured") {
+        archiveOwnerPubkey ??= normalizePubkey(await _ownerPubkeyFn());
+        archiveRelayUrl ??= await _relayUrlFn();
+        if (activeGeneration !== generation) return;
+        recordAvailableCommandsUpdate(
+          archiveOwnerPubkey,
+          archiveRelayUrl,
+          agentPubkey,
+          parsed,
+        );
+      }
       // Route archived events to the channel-scoped archive window (no cap)
       // rather than the per-agent live-relay store (MAX_OBSERVER_EVENTS cap).
       // Events without a channelId fall through to the live store so they
@@ -741,6 +781,8 @@ export function resetAgentObserverStore() {
   unsubscribeRelay = null;
   startPromise = null;
   eventProcessingQueue = Promise.resolve();
+  observerOwnerPubkey = null;
+  observerRelayUrl = null;
   eventsByAgent.clear();
   transcriptByAgent.clear();
   snapshotByAgent.clear();

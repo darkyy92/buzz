@@ -258,6 +258,9 @@ impl RespondToArg {
 
 #[derive(Subcommand)]
 pub enum AgentsCmd {
+    /// Publish capabilities for this native agent identity
+    #[command(subcommand)]
+    Commands(AgentCommandsCmd),
     /// Open a prefilled create-agent form in the owner's Buzz Desktop
     DraftCreate {
         /// Current channel UUID; the new agent is added here after save
@@ -342,6 +345,23 @@ Examples:\n  \
 buzz agents archived"
     )]
     Archived,
+}
+
+#[derive(Subcommand)]
+pub enum AgentCommandsCmd {
+    /// Publish the complete versioned slash-command catalog
+    #[command(after_help = "The input is the NIP-78 v1 JSON content:\n  \
+{\"version\":1,\"commands\":[{\"name\":\"review\",\"description\":\"Review changes\"}]}\n\n\
+The event is signed by BUZZ_PRIVATE_KEY and replaces this identity's previous \
+catalog on the selected relay. An empty commands array clears it.\n\n\
+Examples:\n  \
+buzz agents commands publish --file commands.json\n  \
+generate-commands | buzz agents commands publish --file -")]
+    Publish {
+        /// JSON file path, or '-' for stdin
+        #[arg(long, default_value = "-")]
+        file: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1866,6 +1886,23 @@ mod tests {
     }
 
     #[test]
+    fn agents_commands_publish_accepts_file_or_stdin() {
+        assert!(Cli::try_parse_from([
+            "buzz",
+            "agents",
+            "commands",
+            "publish",
+            "--file",
+            "commands.json",
+        ])
+        .is_ok());
+        assert!(
+            Cli::try_parse_from(["buzz", "agents", "commands", "publish"]).is_ok(),
+            "stdin is the default publication source"
+        );
+    }
+
+    #[test]
     fn command_inventory_is_stable() {
         let expected_groups: Vec<&str> = vec![
             "agents",
@@ -1935,6 +1972,7 @@ mod tests {
             vec![
                 "archive",
                 "archived",
+                "commands",
                 "draft-create",
                 "draft-update",
                 "unarchive"
@@ -2063,7 +2101,7 @@ mod tests {
     #[test]
     fn subcommand_counts_are_stable() {
         let expected: Vec<(&str, usize)> = vec![
-            ("agents", 5),
+            ("agents", 6),
             ("canvas", 2),
             ("channels", 16),
             ("dms", 4),
