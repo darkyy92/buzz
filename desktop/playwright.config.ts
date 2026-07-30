@@ -64,6 +64,7 @@ export default defineConfig({
         "**/mentions.spec.ts",
         "**/team-mentions.spec.ts",
         "**/persistent-agent-audience.spec.ts",
+        "**/slash-command-autocomplete.spec.ts",
         "**/relay-reconnect.spec.ts",
         "**/relay-reconnect-affordance.spec.ts",
         "**/workflows.spec.ts",

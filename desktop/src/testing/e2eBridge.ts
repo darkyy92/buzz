@@ -19,12 +19,14 @@ import {
   injectObserverEventsForE2E,
   syncAgentObserverEvents,
 } from "@/features/agents/observerRelayStore";
+import { AGENT_COMMAND_CATALOG_D_TAG } from "@/features/agents/relayAgentCommandCatalog";
 import {
   CUSTOM_EMOJI_SET_D_TAG,
   KIND_EMOJI_SET,
 } from "@/shared/api/customEmoji";
 import {
   KIND_AGENT_OBSERVER_FRAME,
+  KIND_APP_DATA,
   KIND_CHANNEL_THREAD_SUMMARY,
   KIND_CHANNEL_WINDOW_BOUNDS,
   KIND_DM_VISIBILITY,
@@ -231,6 +233,8 @@ type E2eConfig = {
     personas?: MockPersonaSeed[];
     /** Community catalog replaceable-event heads returned by relay queries. */
     personaCatalogEvents?: RelayEvent[];
+    /** Native agent command catalog heads returned by NIP-78 relay queries. */
+    agentCommandCatalogEvents?: RelayEvent[];
     /** Outcomes for successive explicit persona share publications. */
     personaSharePublicationStatuses?: Array<"published" | "queued">;
     teams?: MockTeamSeed[];
@@ -1139,6 +1143,7 @@ declare global {
         payload: unknown;
       }>;
     }) => void;
+    __BUZZ_E2E_PUBLISH_AGENT_COMMAND_CATALOG__?: (event: RelayEvent) => void;
     __BUZZ_E2E_EMIT_MOCK_READ_STATE__?: (input: {
       clientId: string;
       contexts: Record<string, number>;
@@ -2805,6 +2810,7 @@ const mockMessages = new Map<string, RelayEvent[]>();
 const mockUserStatuses: RelayEvent[] = [];
 const mockReminderEvents: RelayEvent[] = [];
 const mockPersonaEvents: RelayEvent[] = [];
+const mockAgentCommandCatalogEvents: RelayEvent[] = [];
 let mockRelayMembers: RawRelayMember[] = [];
 const mockSockets = new Map<number, MockSocket>();
 let mockWebsocketSendMutexWedged = false;
@@ -2842,6 +2848,27 @@ function resetMockPersonaCatalogEvents(config: E2eConfig | undefined) {
       ...event,
       tags: event.tags.map((tag) => [...tag]),
     });
+  }
+}
+
+function upsertMockAgentCommandCatalogEvent(event: RelayEvent) {
+  const dTag = event.tags.find((tag) => tag[0] === "d")?.[1];
+  const index = mockAgentCommandCatalogEvents.findIndex(
+    (candidate) =>
+      candidate.pubkey.toLowerCase() === event.pubkey.toLowerCase() &&
+      candidate.tags.some((tag) => tag[0] === "d" && tag[1] === dTag),
+  );
+  if (index >= 0) mockAgentCommandCatalogEvents.splice(index, 1);
+  mockAgentCommandCatalogEvents.push({
+    ...event,
+    tags: event.tags.map((tag) => [...tag]),
+  });
+}
+
+function resetMockAgentCommandCatalogEvents(config: E2eConfig | undefined) {
+  mockAgentCommandCatalogEvents.length = 0;
+  for (const event of config?.mock?.agentCommandCatalogEvents ?? []) {
+    upsertMockAgentCommandCatalogEvent(event);
   }
 }
 
@@ -9147,6 +9174,19 @@ function sendToMockSocket(args: {
       return;
     }
 
+    if (
+      filter.kinds?.includes(KIND_APP_DATA) &&
+      filter["#d"]?.includes(AGENT_COMMAND_CATALOG_D_TAG)
+    ) {
+      const authors = filter.authors?.map((author) => author.toLowerCase());
+      for (const event of mockAgentCommandCatalogEvents) {
+        if (authors && !authors.includes(event.pubkey.toLowerCase())) continue;
+        sendWsText(socket.handler, ["EVENT", subId, event]);
+      }
+      sendWsText(socket.handler, ["EOSE", subId]);
+      return;
+    }
+
     // Project queries: NIP-34 kinds, or kind:1 comments scoped by repo `a`
     // tag (PR/issue discussions, approvals, review requests).
     if (
@@ -9227,7 +9267,15 @@ function sendToMockSocket(args: {
       return;
     }
 
-    if (event.kind === 30078) {
+    if (event.kind === KIND_APP_DATA) {
+      if (
+        event.tags.some(
+          (tag) => tag[0] === "d" && tag[1] === AGENT_COMMAND_CATALOG_D_TAG,
+        )
+      ) {
+        upsertMockAgentCommandCatalogEvent(event);
+        emitMockGlobalEvent(event);
+      }
       sendWsText(socket.handler, ["OK", event.id, true, ""]);
       return;
     }
@@ -9397,6 +9445,7 @@ export function maybeInstallE2eTauriMocks() {
   resetMockMesh();
   resetMockUserStatuses();
   resetMockPersonaCatalogEvents(config);
+  resetMockAgentCommandCatalogEvents(config);
   resetMockSaveSubscriptions(config);
   resetMockPendingCommunityDeepLinks(config);
   mockWebsocketSendMutexWedged = false;
@@ -9643,6 +9692,10 @@ export function maybeInstallE2eTauriMocks() {
   };
   window.__BUZZ_E2E_SEED_OBSERVER_EVENTS__ = ({ agentPubkey, events }) => {
     injectObserverEventsForE2E(agentPubkey, events);
+  };
+  window.__BUZZ_E2E_PUBLISH_AGENT_COMMAND_CATALOG__ = (event) => {
+    upsertMockAgentCommandCatalogEvent(event);
+    emitMockGlobalEvent(event);
   };
   const meshNodeStatus = (
     state: "off" | "running",

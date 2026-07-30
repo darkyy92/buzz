@@ -1,10 +1,11 @@
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota";
+import { canonicalRelayUrl } from "./managedAgentRuntimeStatus";
 
-const STORAGE_PREFIX = "buzz-agent-command-catalog.v1";
-const MAX_COMMANDS_PER_AGENT = 256;
+const STORAGE_PREFIX = "buzz-agent-command-catalog.v2";
+const MAX_COMMANDS_PER_AGENT = 512;
 const MAX_COMMAND_NAME_LENGTH = 128;
-const MAX_COMMAND_DESCRIPTION_LENGTH = 512;
+const MAX_COMMAND_DESCRIPTION_LENGTH = 80;
 
 export type AgentCommand = {
   name: string;
@@ -31,14 +32,23 @@ type AvailableCommandsEvent = {
 };
 
 const EMPTY_CATALOG: AgentCommandCatalog = new Map();
-// Managed-agent observer ingestion is owner-global; command capabilities belong
-// to the agent pubkey rather than whichever community currently renders it.
-const catalogByOwner = new Map<string, AgentCommandCatalog>();
-const hydratedOwners = new Set<string>();
+const catalogByScope = new Map<string, AgentCommandCatalog>();
+const hydratedScopes = new Set<string>();
 const listeners = new Set<() => void>();
 
-function storageKey(ownerPubkey: string): string {
-  return `${STORAGE_PREFIX}:${normalizePubkey(ownerPubkey)}`;
+function normalizeRelayScope(relayUrl: string): string {
+  return canonicalRelayUrl(relayUrl) ?? relayUrl.trim().toLowerCase();
+}
+
+function scopeKey(ownerPubkey: string, relayUrl: string): string {
+  return JSON.stringify([
+    normalizeRelayScope(relayUrl),
+    normalizePubkey(ownerPubkey),
+  ]);
+}
+
+function storageKey(ownerPubkey: string, relayUrl: string): string {
+  return `${STORAGE_PREFIX}:${encodeURIComponent(normalizeRelayScope(relayUrl))}:${normalizePubkey(ownerPubkey)}`;
 }
 
 function sanitizeCommand(value: unknown): AgentCommand | null {
@@ -59,8 +69,9 @@ function sanitizeCommand(value: unknown): AgentCommand | null {
 
   const description =
     typeof record.description === "string"
-      ? record.description.trim().slice(0, MAX_COMMAND_DESCRIPTION_LENGTH) ||
-        null
+      ? [...record.description.trim()]
+          .slice(0, MAX_COMMAND_DESCRIPTION_LENGTH)
+          .join("") || null
       : null;
   return { name, description };
 }
@@ -76,11 +87,13 @@ export function parseAvailableCommandsPayload(
     return null;
   }
   const commands = (payload as Record<string, unknown>).commands;
-  if (!Array.isArray(commands)) return null;
+  if (!Array.isArray(commands) || commands.length > MAX_COMMANDS_PER_AGENT) {
+    return null;
+  }
 
   const parsed: AgentCommand[] = [];
   const seen = new Set<string>();
-  for (const value of commands.slice(0, MAX_COMMANDS_PER_AGENT)) {
+  for (const value of commands) {
     const command = sanitizeCommand(value);
     if (!command) continue;
     const key = command.name.toLowerCase();
@@ -129,24 +142,28 @@ function parseStoredCatalog(raw: string | null): AgentCommandCatalog {
   }
 }
 
-function hydrate(ownerPubkey: string): AgentCommandCatalog {
-  const owner = normalizePubkey(ownerPubkey);
-  if (!hydratedOwners.has(owner)) {
+function hydrate(ownerPubkey: string, relayUrl: string): AgentCommandCatalog {
+  const key = scopeKey(ownerPubkey, relayUrl);
+  if (!hydratedScopes.has(key)) {
     const raw =
       typeof window === "undefined"
         ? null
-        : window.localStorage.getItem(storageKey(owner));
-    catalogByOwner.set(owner, parseStoredCatalog(raw));
-    hydratedOwners.add(owner);
+        : window.localStorage.getItem(storageKey(ownerPubkey, relayUrl));
+    catalogByScope.set(key, parseStoredCatalog(raw));
+    hydratedScopes.add(key);
   }
-  return catalogByOwner.get(owner) ?? EMPTY_CATALOG;
+  return catalogByScope.get(key) ?? EMPTY_CATALOG;
 }
 
-function persist(ownerPubkey: string, catalog: AgentCommandCatalog): void {
+function persist(
+  ownerPubkey: string,
+  relayUrl: string,
+  catalog: AgentCommandCatalog,
+): void {
   if (typeof window === "undefined") return;
   const agents = Object.fromEntries(catalog.entries());
   setLocalStorageItemWithRecovery(
-    storageKey(ownerPubkey),
+    storageKey(ownerPubkey, relayUrl),
     JSON.stringify({ version: 1, agents } satisfies PersistedCatalog),
   );
 }
@@ -166,15 +183,16 @@ function isNewer(
 
 export function recordAvailableCommandsUpdate(
   ownerPubkey: string,
+  relayUrl: string,
   agentPubkey: string,
   event: AvailableCommandsEvent,
 ): boolean {
   const commands = parseAvailableCommandsPayload(event.payload);
   if (commands === null || !Number.isSafeInteger(event.seq)) return false;
 
-  const owner = normalizePubkey(ownerPubkey);
   const agent = normalizePubkey(agentPubkey);
-  const current = hydrate(owner);
+  const key = scopeKey(ownerPubkey, relayUrl);
+  const current = hydrate(ownerPubkey, relayUrl);
   if (!isNewer(event, current.get(agent))) return false;
 
   const next = new Map(current);
@@ -183,16 +201,19 @@ export function recordAvailableCommandsUpdate(
     seq: event.seq,
     timestamp: event.timestamp,
   });
-  catalogByOwner.set(owner, next);
-  persist(owner, next);
+  catalogByScope.set(key, next);
+  persist(ownerPubkey, relayUrl, next);
   for (const listener of listeners) listener();
   return true;
 }
 
 export function getAgentCommandCatalog(
   ownerPubkey: string | null,
+  relayUrl: string | null,
 ): AgentCommandCatalog {
-  return ownerPubkey ? hydrate(ownerPubkey) : EMPTY_CATALOG;
+  return ownerPubkey && relayUrl
+    ? hydrate(ownerPubkey, relayUrl)
+    : EMPTY_CATALOG;
 }
 
 export function subscribeAgentCommandCatalog(listener: () => void): () => void {
@@ -200,8 +221,12 @@ export function subscribeAgentCommandCatalog(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+export function resetAgentCommandCatalog(): void {
+  catalogByScope.clear();
+  hydratedScopes.clear();
+}
+
 export function resetAgentCommandCatalogForTests(): void {
-  catalogByOwner.clear();
-  hydratedOwners.clear();
+  resetAgentCommandCatalog();
   listeners.clear();
 }

@@ -41,11 +41,12 @@ export const KIND_HUDDLE_PARTICIPANT_LEFT = 48102;
 export const KIND_HUDDLE_ENDED = 48103;
 // NIP-78 application-specific data. All use kind 30078; the relay
 // differentiates them by d-tag ("read-state:<slotId>", "channel-sections", "channel-mutes", "channel-stars", "channel-sort").
-export const KIND_READ_STATE = 30078;
-export const KIND_CHANNEL_SECTIONS = 30078;
-export const KIND_CHANNEL_MUTES = 30078;
-export const KIND_CHANNEL_STARS = 30078;
-export const KIND_CHANNEL_SORT = 30078;
+export const KIND_APP_DATA = 30078;
+export const KIND_READ_STATE = KIND_APP_DATA;
+export const KIND_CHANNEL_SECTIONS = KIND_APP_DATA;
+export const KIND_CHANNEL_MUTES = KIND_APP_DATA;
+export const KIND_CHANNEL_STARS = KIND_APP_DATA;
+export const KIND_CHANNEL_SORT = KIND_APP_DATA;
 // NIP-33 persona/team/managed-agent projection events (d-tag keyed). Published
 // backend-side as secrets-stripped snapshots; the inbound sync hook subscribes
 // to all three to patch local records. Mirror of buzz-core's KIND_PERSONA etc.

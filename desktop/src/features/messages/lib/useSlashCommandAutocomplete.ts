@@ -1,13 +1,19 @@
 import * as React from "react";
 
+import {
+  mergeAgentCommandCatalogs,
+  useRelayAgentCommandCatalog,
+} from "@/features/agents/relayAgentCommandCatalog";
 import { useAgentCommandCatalog } from "@/features/agents/useAgentCommandCatalog";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
+import { useCommunities } from "@/features/communities/useCommunities";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 import type { AutocompleteEdit } from "./useRichTextEditor";
 import {
   buildSlashCommandInsertText,
-  buildSlashCommandGroups,
+  buildSlashCommandMenu,
   detectSlashCommandQuery,
+  getSlashCommandFooterMessage,
   resolveLeadingAgentMentionPubkeys,
   type SlashCommandQuery,
   type SlashCommandSuggestion,
@@ -27,7 +33,9 @@ export function useSlashCommandAutocomplete({
   ownerPubkey: string | null;
 }) {
   const membersQuery = useChannelMembersQuery(channelId, Boolean(channelId));
-  const catalog = useAgentCommandCatalog(ownerPubkey);
+  const { activeCommunity } = useCommunities();
+  const relayUrl = activeCommunity?.relayUrl ?? null;
+  const acpCatalog = useAgentCommandCatalog(ownerPubkey, relayUrl);
   const [activeQuery, setActiveQuery] = React.useState<ActiveQuery | null>(
     null,
   );
@@ -45,24 +53,51 @@ export function useSlashCommandAutocomplete({
         })),
     [membersQuery.data],
   );
+  const providerPubkeys = React.useMemo(
+    () => providers.map((provider) => provider.pubkey),
+    [providers],
+  );
+  const relayCatalog = useRelayAgentCommandCatalog(providerPubkeys, relayUrl);
+  const catalog = React.useMemo(
+    () => mergeAgentCommandCatalogs(acpCatalog, relayCatalog),
+    [acpCatalog, relayCatalog],
+  );
 
-  const groups = React.useMemo(
+  const menu = React.useMemo(
     () =>
       activeQuery
-        ? buildSlashCommandGroups({
+        ? buildSlashCommandMenu({
             catalog,
             providers,
             query: activeQuery.detected.query,
             selectedAgentPubkeys: activeQuery.selectedAgentPubkeys,
           })
-        : [],
+        : {
+            displayedCount: 0,
+            groups: [],
+            totalCommandCount: 0,
+            totalMatchCount: 0,
+          },
     [activeQuery, catalog, providers],
   );
+  const groups = menu.groups;
   const suggestions = React.useMemo(
     () => groups.flatMap((group) => group.commands),
     [groups],
   );
-  const isOpen = activeQuery !== null && suggestions.length > 0;
+  const hasAnyCommands = menu.totalCommandCount > 0;
+  const isOpen =
+    activeQuery !== null && (suggestions.length > 0 || hasAnyCommands);
+  const emptyMessage =
+    isOpen && suggestions.length === 0
+      ? activeQuery?.selectedAgentPubkeys
+        ? "No matching commands for the mentioned agent"
+        : "No matching commands"
+      : null;
+  const footerMessage =
+    isOpen && activeQuery
+      ? getSlashCommandFooterMessage(menu, activeQuery.detected.query)
+      : null;
 
   React.useEffect(() => {
     setSelectedIndex((current) =>
@@ -93,7 +128,7 @@ export function useSlashCommandAutocomplete({
         }
       }
 
-      const signature = `${detected.replaceFromOffset}:${detected.leadingText}:${detected.query}`;
+      const signature = `${detected.replaceFromOffset}:${detected.replaceToOffset}:${detected.leadingText}:${detected.query}`;
       if (dismissedSignatureRef.current === signature) {
         setActiveQuery(null);
         return;
@@ -106,14 +141,11 @@ export function useSlashCommandAutocomplete({
   );
 
   const insertCommand = React.useCallback(
-    (
-      suggestion: SlashCommandSuggestion,
-      selectionEnd: number,
-    ): AutocompleteEdit | null => {
+    (suggestion: SlashCommandSuggestion): AutocompleteEdit | null => {
       if (!activeQuery) return null;
       const edit = {
         replaceFromOffset: activeQuery.detected.replaceFromOffset,
-        replaceToOffset: selectionEnd,
+        replaceToOffset: activeQuery.detected.replaceToOffset,
         insertText: buildSlashCommandInsertText(
           suggestion,
           activeQuery.selectedAgentPubkeys !== null,
@@ -131,6 +163,14 @@ export function useSlashCommandAutocomplete({
       event: React.KeyboardEvent,
     ): { handled: boolean; suggestion?: SlashCommandSuggestion } => {
       if (!isOpen || !activeQuery) return { handled: false };
+      if (event.key === "Escape") {
+        event.preventDefault();
+        dismissedSignatureRef.current = activeQuery.signature;
+        setActiveQuery(null);
+        setSelectedIndex(0);
+        return { handled: true };
+      }
+      if (suggestions.length === 0) return { handled: false };
       if (event.key === "ArrowDown") {
         event.preventDefault();
         setSelectedIndex((current) =>
@@ -156,13 +196,6 @@ export function useSlashCommandAutocomplete({
         event.preventDefault();
         return { handled: true, suggestion: suggestions[selectedIndex] };
       }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        dismissedSignatureRef.current = activeQuery.signature;
-        setActiveQuery(null);
-        setSelectedIndex(0);
-        return { handled: true };
-      }
       return { handled: false };
     },
     [activeQuery, isOpen, selectedIndex, suggestions],
@@ -172,6 +205,8 @@ export function useSlashCommandAutocomplete({
     groups,
     handleKeyDown,
     insertCommand,
+    emptyMessage,
+    footerMessage,
     isOpen,
     selectedIndex,
     suggestions,

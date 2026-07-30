@@ -1,16 +1,35 @@
 use buzz_core::kind::KIND_IA_ARCHIVED_LIST;
-use buzz_sdk::builders::{build_archive_identity_request, build_unarchive_identity_request};
+use buzz_sdk::builders::{
+    build_agent_command_catalog, build_archive_identity_request, build_unarchive_identity_request,
+};
+use buzz_sdk::AgentCommandCatalog;
 use nostr::PublicKey;
 use serde_json::json;
 
 use crate::agent_management::{build_create, build_update, CreateAgentDraft, UpdateAgentDraft};
-use crate::client::BuzzClient;
+use crate::client::{normalize_write_response, BuzzClient};
 use crate::error::CliError;
 use crate::validate::{read_or_stdin, validate_hex64};
-use crate::{AgentsCmd, RespondToArg};
+use crate::{AgentCommandsCmd, AgentsCmd, RespondToArg};
 
 pub async fn dispatch(command: AgentsCmd, client: &BuzzClient) -> Result<(), CliError> {
     match command {
+        AgentsCmd::Commands(command) => match command {
+            AgentCommandsCmd::Publish { file } => {
+                let input = read_or_stdin(&file)?;
+                let catalog: AgentCommandCatalog =
+                    serde_json::from_str(&input).map_err(|error| {
+                        CliError::Usage(format!("invalid agent command catalog JSON: {error}"))
+                    })?;
+                let builder = build_agent_command_catalog(&catalog)
+                    .map_err(|error| CliError::Usage(error.to_string()))?;
+                let event = client.sign_event(builder)?;
+                let response = client.submit_event(event).await?;
+                println!("{}", normalize_write_response(&response));
+                Ok(())
+            }
+        },
+
         AgentsCmd::DraftCreate {
             channel,
             display_name,

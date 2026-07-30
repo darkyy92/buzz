@@ -68,11 +68,16 @@ pub const KIND_LONG_FORM: u32 = 30023;
 /// Parameterized replaceable (NIP-33, 30000–39999 range) — keyed by `(pubkey, kind, d_tag)`.
 /// Stored globally (channel_id = NULL); user-owned personal data, not channel-scoped.
 pub const KIND_USER_STATUS: u32 = 30315;
-/// NIP-78 / NIP-RS: Per-client read state blob for cross-device read position sync.
+/// NIP-78: Application-specific data (parameterized replaceable).
+///
+/// The `d` tag selects the application's versioned schema. Buzz uses this
+/// shared kind for read state and other small user/agent-authored manifests.
+pub const KIND_APP_DATA: u32 = 30078;
+/// NIP-RS: Per-client read state blob for cross-device read position sync.
 /// Parameterized replaceable (NIP-33, 30000–39999 range) — keyed by `(pubkey, kind, d_tag)`.
 /// Stored globally (channel_id = NULL); user-owned personal data, not channel-scoped.
 /// Content is NIP-44 encrypted to the user's own keypair.
-pub const KIND_READ_STATE: u32 = 30078;
+pub const KIND_READ_STATE: u32 = KIND_APP_DATA;
 /// NIP-42 auth event — never stored (carries bearer tokens).
 pub const KIND_AUTH: u32 = 22242;
 /// BUD-01: Blossom upload auth (used in upload.rs, not stored).

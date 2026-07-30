@@ -29,6 +29,7 @@ import {
 const AGENT_PUBKEY = "a".repeat(64);
 const OTHER_PUBKEY = "b".repeat(64);
 const SUB_ID = "test-sub-1";
+const RELAY_URL = "wss://commands.example";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -113,10 +114,12 @@ describe("ingestArchivedObserverEvents", () => {
       [makeRawEvent()],
       makeDecrypt(commandEvent),
       async () => ownerPubkey,
+      async () => RELAY_URL,
     );
 
     assert.deepEqual(
-      getAgentCommandCatalog(ownerPubkey).get(AGENT_PUBKEY)?.commands,
+      getAgentCommandCatalog(ownerPubkey, RELAY_URL).get(AGENT_PUBKEY)
+        ?.commands,
       [{ name: "review", description: "Review changes" }],
     );
   });
