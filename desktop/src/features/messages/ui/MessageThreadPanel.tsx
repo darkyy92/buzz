@@ -49,6 +49,7 @@ import { UnreadDivider } from "./UnreadDivider";
 import { useComposerHeightPadding } from "./useComposerHeightPadding";
 import { useAnchoredScroll } from "./useAnchoredScroll";
 import { selectDeferredListRenderState } from "@/features/messages/lib/timelineSnapshot";
+import { ThreadTitleEditor } from "@/features/threads/ThreadTitleEditor";
 
 type MessageThreadPanelProps = ThreadPanelLayoutProps & {
   channel: Channel | null;
@@ -927,7 +928,21 @@ export function MessageThreadPanel({
         leading={headerLeading}
         onBack={isSinglePanelView && !isFocusMode ? onClose : undefined}
       >
-        <AuxiliaryPanelTitle>Thread</AuxiliaryPanelTitle>
+        {channelId ? (
+          <ThreadTitleEditor
+            canRename={canManageMessageForCurrentUser(
+              threadHead,
+              currentPubkey,
+              profiles,
+            )}
+            channelId={channelId}
+            currentPubkey={currentPubkey}
+            key={threadHead.id}
+            threadHead={threadHead}
+          />
+        ) : (
+          <AuxiliaryPanelTitle>Thread</AuxiliaryPanelTitle>
+        )}
       </AuxiliaryPanelHeaderGroup>
     </>
   );

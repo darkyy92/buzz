@@ -226,7 +226,13 @@ export function formatTimelineMessages(
   // the original (`h`, `p` mentions, etc.) stay untouched.
   const editsByTargetId = new Map<
     string,
-    { content: string; tags: string[][]; createdAt: number }
+    { id: string; content: string; tags: string[][]; createdAt: number }
+  >();
+  // Subject is independently cumulative. A later body-only edit must not erase
+  // a thread title published by an earlier NIP-14 subject-bearing edit.
+  const subjectsByTargetId = new Map<
+    string,
+    { id: string; tag: string[]; createdAt: number }
   >();
   for (const event of events) {
     if (
@@ -242,10 +248,31 @@ export function formatTimelineMessages(
     }
 
     const existing = editsByTargetId.get(targetId);
-    if (!existing || event.created_at > existing.createdAt) {
+    if (
+      !existing ||
+      event.created_at > existing.createdAt ||
+      (event.created_at === existing.createdAt && event.id > existing.id)
+    ) {
       editsByTargetId.set(targetId, {
+        id: event.id,
         content: event.content,
         tags: event.tags,
+        createdAt: event.created_at,
+      });
+    }
+
+    const subjectTag = event.tags.find((tag) => tag[0] === "subject");
+    const existingSubject = subjectsByTargetId.get(targetId);
+    if (
+      subjectTag &&
+      (!existingSubject ||
+        event.created_at > existingSubject.createdAt ||
+        (event.created_at === existingSubject.createdAt &&
+          event.id > existingSubject.id))
+    ) {
+      subjectsByTargetId.set(targetId, {
+        id: event.id,
+        tag: subjectTag,
         createdAt: event.created_at,
       });
     }
@@ -425,6 +452,7 @@ export function formatTimelineMessages(
       });
     const thread = getThreadReference(event.tags);
     const edit = editsByTargetId.get(event.id);
+    const subject = subjectsByTargetId.get(event.id);
     const role = roleByPubkey.get(authorPubkey.toLowerCase());
     const authorProfile = profiles?.[authorPubkey.toLowerCase()];
     const isAgent = role === "bot" || authorProfile?.isAgent === true;
@@ -469,7 +497,17 @@ export function formatTimelineMessages(
       // imeta tags. All non-imeta tags on the original are preserved.
       // Logic lives in `applyEditTagOverlay.mjs` so prod and tests share
       // a single source.
-      tags: applyEditTagOverlay(event.tags, edit?.tags),
+      tags: applyEditTagOverlay(
+        event.tags,
+        edit
+          ? [
+              ...edit.tags.filter((tag) => tag[0] !== "subject"),
+              ...(subject ? [subject.tag] : []),
+            ]
+          : subject
+            ? [subject.tag]
+            : undefined,
+      ),
       reactions: (() => {
         const reactions = reactionsByEventId.get(event.id);
         if (!reactions) return undefined;

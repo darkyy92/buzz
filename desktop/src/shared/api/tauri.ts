@@ -39,6 +39,7 @@ import type {
 } from "@/shared/api/types";
 
 export * from "@/shared/api/tauriChannels";
+export * from "@/shared/api/tauriMessages";
 
 type RawPresenceLookup = Record<string, PresenceStatus>;
 
@@ -619,24 +620,6 @@ export async function uploadMediaBytes(
     data,
     filename,
     progressId,
-  });
-}
-
-export async function editMessage(
-  channelId: string,
-  eventId: string,
-  content: string,
-  mediaTags?: string[][],
-  emojiTags?: string[][],
-  mentionPubkeys?: string[],
-): Promise<void> {
-  await invokeTauri("edit_message", {
-    channelId,
-    eventId,
-    content,
-    mediaTags: mediaTags ?? [],
-    emojiTags: emojiTags ?? [],
-    mentionPubkeys: mentionPubkeys ?? null,
   });
 }
 
