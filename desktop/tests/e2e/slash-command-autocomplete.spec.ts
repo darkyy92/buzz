@@ -46,7 +46,11 @@ async function openGeneral(page: Page) {
   await page.goto(`/#/channels/${CHANNEL_ID}`, {
     waitUntil: "domcontentloaded",
   });
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  // The first cold desktop bundle load can exceed Playwright's 5s assertion
+  // default on CI and development Macs.
+  await expect(page.getByTestId("chat-title")).toHaveText("general", {
+    timeout: 15_000,
+  });
 }
 
 test.beforeEach(async ({ page }) => {
@@ -182,8 +186,11 @@ test("mouse, Escape, and ordinary prose keep composer semantics", async ({
     0,
   );
 
-  await input.fill("");
-  await input.fill("/");
+  // Reopen the palette through the same distinct edits a user makes so the
+  // Escape dismissal is cleared before the slash query is entered again.
+  await input.press("Backspace");
+  await expect(input).toHaveText("");
+  await input.type("/");
   await composer.getByText("/goal", { exact: true }).click();
   await expect(input).toHaveText(/@alice \/goal $/i);
   await expect(input).toBeFocused();
