@@ -40,6 +40,7 @@ test("startup recovery removes disposable caches but preserves user state", () =
   ls.store.set("buzz-channels.v1:relay", "big");
   ls.store.set("buzz-timeline-skeleton-shape.v1:chan", "small");
   ls.store.set("buzz-sidebar-skeleton-shape.v1:community:user", "small");
+  ls.store.set("buzz-agent-command-catalog.v2:relay:owner", "commands");
   ls.store.set("buzz-communities", "keep");
 
   recoverLocalStorageQuotaOnStartup();
@@ -51,6 +52,7 @@ test("startup recovery removes disposable caches but preserves user state", () =
     ls.getItem("buzz-sidebar-skeleton-shape.v1:community:user"),
     null,
   );
+  assert.equal(ls.getItem("buzz-agent-command-catalog.v2:relay:owner"), null);
   assert.equal(ls.getItem("buzz-communities"), "keep");
   assert.equal(ls.getItem("buzz-local-storage-quota-recovery.v1"), "1");
 });
@@ -67,15 +69,17 @@ test("healthy startup preserves disposable caches", () => {
 });
 
 test("startup recovery does not remove namespace near misses", () => {
-  const ls = makeQuotaLocalStorage({ maxEntries: 2 });
+  const ls = makeQuotaLocalStorage({ maxEntries: 3 });
   install(ls);
   ls.store.set("buzz-channels.v10:durable", "keep");
   ls.store.set("buzz-channel-messages.v1-durable", "keep");
+  ls.store.set("buzz-agent-command-catalog.v20:durable", "keep");
 
   recoverLocalStorageQuotaOnStartup();
 
   assert.equal(ls.getItem("buzz-channels.v10:durable"), "keep");
   assert.equal(ls.getItem("buzz-channel-messages.v1-durable"), "keep");
+  assert.equal(ls.getItem("buzz-agent-command-catalog.v20:durable"), "keep");
   assert.equal(ls.getItem("buzz-local-storage-quota-recovery.v1"), null);
 });
 
@@ -181,13 +185,13 @@ test("writes normally when under quota", () => {
 test("evicts pure caches and retries on quota failure", () => {
   const ls = makeQuotaLocalStorage({ maxEntries: 2 });
   install(ls);
-  ls.store.set("buzz-channel-messages.v1:relay:chan", "big");
-  ls.store.set("buzz-channels.v1:relay", "big");
+  ls.store.set("buzz-agent-command-catalog.v2:relay:owner", "commands");
+  ls.store.set("buzz-communities", "keep");
 
   assert.equal(setLocalStorageItemWithRecovery("k", "v"), true);
   assert.equal(ls.getItem("k"), "v");
-  assert.equal(ls.getItem("buzz-channel-messages.v1:relay:chan"), null);
-  assert.equal(ls.getItem("buzz-channels.v1:relay"), null);
+  assert.equal(ls.getItem("buzz-agent-command-catalog.v2:relay:owner"), null);
+  assert.equal(ls.getItem("buzz-communities"), "keep");
 });
 
 test("returns false when eviction frees nothing", () => {

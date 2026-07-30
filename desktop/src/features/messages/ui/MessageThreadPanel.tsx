@@ -1,8 +1,10 @@
 import * as React from "react";
 import { ArrowDown } from "lucide-react";
 
+import { useAppShell } from "@/app/AppShellContext";
 import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
 import { orderMentionPubkeysByText } from "@/features/messages/lib/orderMentionPubkeys";
+import { useMarkThreadReadOnOpen } from "@/features/threads/useMarkThreadReadOnOpen";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { resolveMentionProps } from "@/shared/lib/resolveMentionNames";
 import {
@@ -106,6 +108,7 @@ type MessageThreadPanelProps = ThreadPanelLayoutProps & {
   threadHead: TimelineMessage | null;
   threadReplies: MainTimelineEntry[];
   threadRepliesPending?: boolean;
+  threadRepliesReady?: boolean;
   threadUnreadCount?: number;
   threadReplyUnreadCounts?: ReadonlyMap<string, number>;
   threadTypingPubkeys: string[];
@@ -225,6 +228,7 @@ export function MessageThreadPanel({
   videoReviewContextsByMessageId,
   threadReplies,
   threadRepliesPending = false,
+  threadRepliesReady = true,
   threadUnreadCount,
   threadReplyUnreadCounts,
   threadTypingPubkeys,
@@ -235,6 +239,7 @@ export function MessageThreadPanel({
   autoSendDraftKey = null,
   onAutoSubmitComplete,
 }: MessageThreadPanelProps) {
+  const { markThreadRead } = useAppShell();
   const threadBodyRef = React.useRef<HTMLDivElement>(null);
   const threadContentRef = React.useRef<HTMLDivElement>(null);
   const threadComposerWrapperRef = React.useRef<HTMLDivElement>(null);
@@ -246,6 +251,12 @@ export function MessageThreadPanel({
   >(null);
   const isOverlay = useIsThreadPanelOverlay();
   const threadHeadId = threadHead?.id ?? null;
+  useMarkThreadReadOnOpen({
+    markThreadRead,
+    ready: threadRepliesReady,
+    replies: threadReplies,
+    threadHead,
+  });
   useEscapeKey(onClose, isOverlay || isSinglePanelView || isFocusMode);
   const hasConstrainedColumn = columnMaxWidthPx != null;
   // Whether the composer dock trades its quiet-state spacer for the

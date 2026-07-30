@@ -112,6 +112,65 @@ test("a far-future edit still rewrites the body of an old message", () => {
   assert.equal(out[0].edited, true, "the message must be marked edited");
 });
 
+test("a protocol-distinct thread-title event cannot overwrite a concurrent body edit", () => {
+  const original = streamMessage({ content: "body captured by title UI" });
+  const concurrentBodyEdit = streamEdit(HEX64_A, "new canonical body", {
+    id: HEX64_B,
+    created_at: 1_700_000_002,
+  });
+  const laterTitleEdit = streamEdit(HEX64_A, "", {
+    id: "c".repeat(64),
+    kind: 40009,
+    created_at: 1_700_000_003,
+    tags: [
+      ["h", CHANNEL_ID],
+      ["e", HEX64_A],
+      ["subject", "Renamed thread"],
+      ["t", "buzz-thread-title"],
+    ],
+  });
+
+  const [message] = formatTimelineMessages(
+    [original, concurrentBodyEdit, laterTitleEdit],
+    null,
+    undefined,
+    null,
+  );
+
+  assert.equal(message.body, "new canonical body");
+  assert.ok(
+    message.tags.some(
+      (tag) => tag[0] === "subject" && tag[1] === "Renamed thread",
+    ),
+  );
+});
+
+test("legacy marked kind-40003 updates both body and thread title", () => {
+  const original = streamMessage({ content: "original body" });
+  const legacyCombinedEdit = streamEdit(HEX64_A, "legacy SDK body update", {
+    tags: [
+      ["h", CHANNEL_ID],
+      ["e", HEX64_A],
+      ["subject", "Legacy SDK title"],
+      ["t", "buzz-thread-title"],
+    ],
+  });
+
+  const [message] = formatTimelineMessages(
+    [original, legacyCombinedEdit],
+    null,
+    undefined,
+    null,
+  );
+
+  assert.equal(message.body, "legacy SDK body update");
+  assert.ok(
+    message.tags.some(
+      (tag) => tag[0] === "subject" && tag[1] === "Legacy SDK title",
+    ),
+  );
+});
+
 test("a far-future deletion still hides an old message", () => {
   const old = streamMessage({ created_at: 1_700_000_000 });
   const lateDeletion = deletionEvent(9005, HEX64_A, {

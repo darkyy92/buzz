@@ -14,7 +14,7 @@ use nostr::{EventBuilder, EventId, Kind, Tag};
 use uuid::Uuid;
 
 mod message_edit;
-pub use message_edit::build_message_edit;
+pub use message_edit::{build_message_edit, build_thread_title_edit};
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -921,7 +921,7 @@ mod tests {
             EventId::from_hex("d24da132115ca0a46233cf4c2ad8338fbf914250cbcaa9181a6dd59533cb5ac1")
                 .unwrap();
         let builder =
-            build_message_edit(channel, target, "hi @alice", &[], &[], mentions, None).unwrap();
+            build_message_edit(channel, target, "hi @alice", &[], &[], mentions).unwrap();
         let secret = nostr::SecretKey::from_hex(
             "0000000000000000000000000000000000000000000000000000000000000003",
         )

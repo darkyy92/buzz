@@ -34,6 +34,7 @@ import {
   KIND_STREAM_MESSAGE_V2,
   KIND_STREAM_MESSAGE_EDIT,
   KIND_STREAM_MESSAGE_DIFF,
+  KIND_STREAM_THREAD_TITLE,
   KIND_SYSTEM_MESSAGE,
 } from "@/shared/constants/kinds";
 import { resolveEventAuthorPubkey } from "@/shared/lib/authors";
@@ -45,6 +46,7 @@ import { applyEditTagOverlay } from "@/features/messages/lib/applyEditTagOverlay
 import { truncatePubkey } from "@/shared/lib/pubkey";
 
 const HEX_RE = /^[0-9a-f]+$/i;
+const THREAD_TITLE_MARKER = "buzz-thread-title";
 
 export function isTimelineContentEvent(event: RelayEvent) {
   return (
@@ -219,11 +221,9 @@ export function formatTimelineMessages(
     }
   }
 
-  // Build a map of latest edit per original message: targetId → { content, tags, createdAt }.
-  // When multiple edits exist for the same message, the most recent one wins.
-  // The edit's own tags are kept so the renderer can overlay imeta tags
-  // (attachments) from the edit onto the original event — non-imeta tags on
-  // the original (`h`, `p` mentions, etc.) stay untouched.
+  // Build a map of latest BODY edit per original message. Kind:40009 title
+  // events are protocol-distinct metadata and never participate in this fold.
+  // Legacy marked kind:40003 events remain combined body+title edits.
   const editsByTargetId = new Map<
     string,
     { id: string; content: string; tags: string[][]; createdAt: number }
@@ -236,7 +236,8 @@ export function formatTimelineMessages(
   >();
   for (const event of events) {
     if (
-      event.kind !== KIND_STREAM_MESSAGE_EDIT ||
+      (event.kind !== KIND_STREAM_MESSAGE_EDIT &&
+        event.kind !== KIND_STREAM_THREAD_TITLE) ||
       deletedEventIds.has(event.id)
     ) {
       continue;
@@ -247,18 +248,20 @@ export function formatTimelineMessages(
       continue;
     }
 
-    const existing = editsByTargetId.get(targetId);
-    if (
-      !existing ||
-      event.created_at > existing.createdAt ||
-      (event.created_at === existing.createdAt && event.id > existing.id)
-    ) {
-      editsByTargetId.set(targetId, {
-        id: event.id,
-        content: event.content,
-        tags: event.tags,
-        createdAt: event.created_at,
-      });
+    if (event.kind === KIND_STREAM_MESSAGE_EDIT) {
+      const existing = editsByTargetId.get(targetId);
+      if (
+        !existing ||
+        event.created_at > existing.createdAt ||
+        (event.created_at === existing.createdAt && event.id > existing.id)
+      ) {
+        editsByTargetId.set(targetId, {
+          id: event.id,
+          content: event.content,
+          tags: event.tags,
+          createdAt: event.created_at,
+        });
+      }
     }
 
     const subjectTag = event.tags.find((tag) => tag[0] === "subject");
@@ -505,8 +508,9 @@ export function formatTimelineMessages(
               ...(subject ? [subject.tag] : []),
             ]
           : subject
-            ? [subject.tag]
+            ? [["t", THREAD_TITLE_MARKER], subject.tag]
             : undefined,
+        edit === undefined && subject !== undefined,
       ),
       reactions: (() => {
         const reactions = reactionsByEventId.get(event.id);

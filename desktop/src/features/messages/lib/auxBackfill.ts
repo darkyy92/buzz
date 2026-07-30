@@ -11,6 +11,7 @@ import {
   CHANNEL_TIMELINE_CONTENT_KINDS,
   KIND_REACTION,
   KIND_STREAM_MESSAGE_EDIT,
+  KIND_STREAM_THREAD_TITLE,
 } from "@/shared/constants/kinds";
 
 const TIMELINE_CONTENT_KINDS: ReadonlySet<number> = new Set(
@@ -37,7 +38,9 @@ export function collectAuxEventIdsForDeletionBackfill(
   return auxEvents
     .filter(
       (event) =>
-        event.kind === KIND_REACTION || event.kind === KIND_STREAM_MESSAGE_EDIT,
+        event.kind === KIND_REACTION ||
+        event.kind === KIND_STREAM_MESSAGE_EDIT ||
+        event.kind === KIND_STREAM_THREAD_TITLE,
     )
     .map((event) => event.id);
 }

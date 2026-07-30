@@ -8,6 +8,8 @@ import {
   detectSlashCommandQuery,
   getSlashCommandFooterMessage,
   resolveLeadingAgentMentionPubkeys,
+  slashCommandListboxId,
+  slashCommandOptionId,
 } from "./slashCommandAutocomplete.ts";
 
 const ALPHA = "aa".repeat(32);
@@ -162,6 +164,68 @@ describe("slash command autocomplete", () => {
     assert.deepEqual(
       group.commands.map((command) => command.name),
       ["review", "preview", "inspect"],
+    );
+  });
+
+  it("globally ranks a later provider exact match before applying the limit", () => {
+    const rankedCatalog = new Map([
+      [
+        ALPHA,
+        {
+          seq: 1,
+          timestamp: "2026-07-30T08:00:00Z",
+          commands: Array.from({ length: 60 }, (_, index) => ({
+            name: `review-${index}`,
+            description: null,
+          })),
+        },
+      ],
+      [
+        BETA,
+        {
+          seq: 1,
+          timestamp: "2026-07-30T08:00:00Z",
+          commands: [{ name: "review", description: null }],
+        },
+      ],
+    ]);
+
+    const menu = buildSlashCommandMenu({
+      catalog: rankedCatalog,
+      providers,
+      query: "review",
+      selectedAgentPubkeys: null,
+    });
+
+    assert.equal(menu.displayedCount, 50);
+    assert.deepEqual(
+      menu.groups.map((group) => group.agentPubkey),
+      [BETA, ALPHA],
+      "provider groups follow their best globally ranked match",
+    );
+    assert.deepEqual(
+      menu.groups[0].commands.map((command) => command.name),
+      ["review"],
+    );
+    assert.equal(
+      menu.groups.flatMap((group) => group.commands)[0]?.name,
+      "review",
+      "the later provider exact match is the first rendered and keyboard-selected suggestion",
+    );
+  });
+
+  it("derives distinct option IDs for concurrent composer instances", () => {
+    const channelListboxId = slashCommandListboxId("channel");
+    const threadListboxId = slashCommandListboxId("thread");
+
+    assert.notEqual(channelListboxId, threadListboxId);
+    assert.equal(
+      slashCommandOptionId(channelListboxId, 0),
+      `${channelListboxId}-option-0`,
+    );
+    assert.equal(
+      slashCommandOptionId(threadListboxId, 0),
+      `${threadListboxId}-option-0`,
     );
   });
 

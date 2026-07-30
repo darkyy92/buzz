@@ -16,8 +16,6 @@ pub async fn edit_message(
     emoji_tags: Option<Vec<Vec<String>>>,
     // Only newly added mentions get a `p` tag, avoiding repeat wake-ups.
     mention_pubkeys: Option<Vec<String>>,
-    // `Some("")` clears the NIP-14 thread title; `None` is a body-only edit.
-    subject: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let channel_uuid = uuid::Uuid::parse_str(&channel_id)
@@ -30,7 +28,6 @@ pub async fn edit_message(
     let emoji = emoji_tags.unwrap_or_default();
     let mentions = mention_pubkeys.unwrap_or_default();
     let mention_refs: Vec<&str> = mentions.iter().map(|value| value.as_str()).collect();
-    let subject = subject.map(|value| value.trim().to_string());
     let builder = events::build_message_edit(
         channel_uuid,
         target_eid,
@@ -38,8 +35,23 @@ pub async fn edit_message(
         &media_tags,
         &emoji,
         &mention_refs,
-        subject.as_deref(),
     )?;
+    submit_event(builder, &state).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_thread_title(
+    channel_id: String,
+    event_id: String,
+    subject: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let channel_uuid = uuid::Uuid::parse_str(&channel_id)
+        .map_err(|_| format!("invalid channel UUID: {channel_id}"))?;
+    let target_eid = EventId::from_hex(&event_id).map_err(|e| format!("invalid event ID: {e}"))?;
+    let subject = subject.trim();
+    let builder = events::build_thread_title_edit(channel_uuid, target_eid, subject)?;
     submit_event(builder, &state).await?;
     Ok(())
 }

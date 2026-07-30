@@ -31,9 +31,10 @@ use buzz_core::kind::{
     KIND_PRODUCT_FEEDBACK, KIND_PROFILE, KIND_REACTION, KIND_READ_STATE, KIND_REPORT,
     KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
     KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
-    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEAM, KIND_TEXT_NOTE, KIND_USER_STATUS,
-    KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER, RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE,
-    RELAY_ADMIN_REMOVE_MEMBER, RELAY_ADMIN_SET_WORKSPACE_PROFILE,
+    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_STREAM_THREAD_TITLE, KIND_TEAM,
+    KIND_TEXT_NOTE, KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER,
+    RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
+    RELAY_ADMIN_SET_WORKSPACE_PROFILE,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_core::verification::verify_event;
@@ -248,6 +249,7 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         | KIND_STREAM_MESSAGE_V2
         | KIND_NIP29_DELETE_EVENT
         | KIND_STREAM_MESSAGE_EDIT
+        | KIND_STREAM_THREAD_TITLE
         | KIND_STREAM_MESSAGE_PINNED
         | KIND_STREAM_MESSAGE_BOOKMARKED
         | KIND_STREAM_MESSAGE_SCHEDULED
@@ -471,6 +473,7 @@ pub(crate) fn requires_h_channel_scope(kind: u32) -> bool {
         KIND_STREAM_MESSAGE
             | KIND_STREAM_MESSAGE_V2
             | KIND_STREAM_MESSAGE_EDIT
+            | KIND_STREAM_THREAD_TITLE
             | KIND_STREAM_MESSAGE_PINNED
             | KIND_STREAM_MESSAGE_BOOKMARKED
             | KIND_STREAM_MESSAGE_SCHEDULED
@@ -771,12 +774,13 @@ pub(crate) fn effective_message_author(event: &Event, relay_pubkey: &nostr::Publ
     event.pubkey.to_bytes().to_vec()
 }
 
-/// Validate kind:40003 edit ownership — event.pubkey must match target's effective author,
+/// Validate message-mutation ownership — event.pubkey must match target's effective author,
 /// or the actor must be the owning human of the agent that authored the target message.
 async fn validate_edit_ownership(
     community_id: CommunityId,
     event: &Event,
     state: &AppState,
+    validate_target: fn(&Event) -> Result<(), String>,
 ) -> Result<(), String> {
     let target_hex = event
         .tags
@@ -804,6 +808,7 @@ async fn validate_edit_ownership(
         .await
         .map_err(|e| format!("db error: {e}"))?
         .ok_or_else(|| "edit target event not found".to_string())?;
+    validate_target(&target_event.event)?;
 
     // Verify target belongs to the same channel as the edit event.
     let edit_channel_id = extract_channel_id(event);
@@ -849,6 +854,53 @@ async fn validate_edit_ownership(
         if !is_owner {
             return Err("must be event author to edit".to_string());
         }
+    }
+    Ok(())
+}
+
+const THREAD_TITLE_MARKER: &str = "buzz-thread-title";
+
+fn allow_message_edit_target(_: &Event) -> Result<(), String> {
+    Ok(())
+}
+
+fn validate_thread_title_target(target: &Event) -> Result<(), String> {
+    match event_kind_u32(target) {
+        KIND_STREAM_MESSAGE | KIND_STREAM_MESSAGE_V2 | KIND_FORUM_POST | KIND_FORUM_COMMENT => {
+            Ok(())
+        }
+        _ => Err("thread title target must be a supported thread-head message".to_string()),
+    }
+}
+
+fn validate_thread_title_event(event: &Event) -> Result<(), String> {
+    if !event.content.is_empty() {
+        return Err("thread title event content must be empty".to_string());
+    }
+    if count_e_tags(event) != 1 {
+        return Err("thread title event must reference exactly one target".to_string());
+    }
+
+    let mut subjects = event
+        .tags
+        .iter()
+        .filter(|tag| tag.kind().to_string() == "subject");
+    let subject = subjects
+        .next()
+        .and_then(|tag| tag.content())
+        .ok_or_else(|| "thread title event must include a subject tag".to_string())?;
+    if subjects.next().is_some() {
+        return Err("thread title event must include exactly one subject tag".to_string());
+    }
+    if subject.chars().count() > 80 {
+        return Err("thread title exceeds maximum length of 80 characters".to_string());
+    }
+    if !event
+        .tags
+        .iter()
+        .any(|tag| tag.kind().to_string() == "t" && tag.content() == Some(THREAD_TITLE_MARKER))
+    {
+        return Err("thread title event is missing its protocol marker".to_string());
     }
     Ok(())
 }
@@ -1804,7 +1856,7 @@ async fn ingest_event_inner(
     if let Some(ch_id) = channel_id {
         // kind:9021 (join) doesn't require prior membership.
         // kind:9007 (create) — channel doesn't exist yet; creator becomes owner in step 16.
-        // kind:40003/9002/9005/9008 — per-kind validators are the authority; they
+        // kind:40003/40009/9002/9005/9008 — per-kind validators are the authority; they
         // individually enforce authorization and fail closed. Bypassing the generic
         // member/open gate here lets the owning human act on private agent channels
         // without being a member (OQ1 decision; see validate_edit_ownership /
@@ -1812,6 +1864,7 @@ async fn ingest_event_inner(
         let skip_membership = kind_u32 == KIND_NIP29_JOIN_REQUEST
             || kind_u32 == KIND_NIP29_CREATE_GROUP
             || kind_u32 == KIND_STREAM_MESSAGE_EDIT
+            || kind_u32 == KIND_STREAM_THREAD_TITLE
             || kind_u32 == KIND_NIP29_EDIT_METADATA
             || kind_u32 == KIND_NIP29_DELETE_EVENT
             || kind_u32 == KIND_NIP29_DELETE_GROUP;
@@ -2003,9 +2056,22 @@ async fn ingest_event_inner(
     }
 
     if kind_u32 == KIND_STREAM_MESSAGE_EDIT {
-        validate_edit_ownership(tenant.community(), &event, state)
+        validate_edit_ownership(tenant.community(), &event, state, allow_message_edit_target)
             .await
             .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+    }
+
+    if kind_u32 == KIND_STREAM_THREAD_TITLE {
+        validate_thread_title_event(&event)
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+        validate_edit_ownership(
+            tenant.community(),
+            &event,
+            state,
+            validate_thread_title_target,
+        )
+        .await
+        .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
     }
 
     if kind_u32 == KIND_FORUM_VOTE {
@@ -2895,6 +2961,7 @@ mod tests {
             KIND_NIP29_JOIN_REQUEST,
             KIND_NIP29_LEAVE_REQUEST,
             KIND_STREAM_MESSAGE_EDIT,
+            KIND_STREAM_THREAD_TITLE,
             KIND_STREAM_MESSAGE_DIFF,
             KIND_CANVAS,
             KIND_FORUM_POST,
@@ -3099,6 +3166,70 @@ mod tests {
             required_scope_for_kind(KIND_PRESENCE_UPDATE, &dummy).is_err(),
             "KIND_PRESENCE_UPDATE should not be in the scope allowlist"
         );
+    }
+
+    #[test]
+    fn thread_title_kind_is_channel_scoped_message_write() {
+        let dummy = make_dummy_event();
+        assert!(requires_h_channel_scope(KIND_STREAM_THREAD_TITLE));
+        assert_eq!(
+            required_scope_for_kind(KIND_STREAM_THREAD_TITLE, &dummy).unwrap(),
+            Scope::MessagesWrite,
+        );
+    }
+
+    #[test]
+    fn thread_title_validation_accepts_metadata_only_shape() {
+        let event = make_event_with_tags(
+            KIND_STREAM_THREAD_TITLE,
+            "",
+            &[
+                &["h", "550e8400-e29b-41d4-a716-446655440000"],
+                &[
+                    "e",
+                    "d24da132115ca0a46233cf4c2ad8338fbf914250cbcaa9181a6dd59533cb5ac1",
+                ],
+                &["subject", "Release notes"],
+                &["t", THREAD_TITLE_MARKER],
+            ],
+        );
+        assert!(validate_thread_title_event(&event).is_ok());
+    }
+
+    #[test]
+    fn thread_title_validation_rejects_body_content() {
+        let event = make_event_with_tags(
+            KIND_STREAM_THREAD_TITLE,
+            "stale body",
+            &[
+                &[
+                    "e",
+                    "d24da132115ca0a46233cf4c2ad8338fbf914250cbcaa9181a6dd59533cb5ac1",
+                ],
+                &["subject", "Release notes"],
+                &["t", THREAD_TITLE_MARKER],
+            ],
+        );
+        assert!(validate_thread_title_event(&event).is_err());
+    }
+
+    #[test]
+    fn thread_title_target_validation_rejects_owned_reaction() {
+        let keys = nostr::Keys::generate();
+        let reaction = nostr::EventBuilder::new(nostr::Kind::Custom(KIND_REACTION as u16), "+")
+            .tags([nostr::Tag::parse([
+                "e",
+                "d24da132115ca0a46233cf4c2ad8338fbf914250cbcaa9181a6dd59533cb5ac1",
+            ])
+            .unwrap()])
+            .sign_with_keys(&keys)
+            .unwrap();
+        let title =
+            nostr::EventBuilder::new(nostr::Kind::Custom(KIND_STREAM_THREAD_TITLE as u16), "")
+                .sign_with_keys(&keys)
+                .unwrap();
+        assert_eq!(reaction.pubkey, title.pubkey);
+        assert!(validate_thread_title_target(&reaction).is_err());
     }
 
     #[test]

@@ -1,11 +1,15 @@
 import type { AgentCommandCatalog } from "@/features/agents/agentCommandCatalog";
 
-export const SLASH_COMMAND_LISTBOX_ID = "message-composer-slash-commands";
+const SLASH_COMMAND_LISTBOX_ID_PREFIX = "message-composer-slash-commands";
 export const SLASH_COMMAND_EMPTY_LIMIT_PER_AGENT = 12;
 export const SLASH_COMMAND_MATCH_LIMIT = 50;
 
-export function slashCommandOptionId(index: number): string {
-  return `${SLASH_COMMAND_LISTBOX_ID}-option-${index}`;
+export function slashCommandListboxId(instanceId: string): string {
+  return `${SLASH_COMMAND_LISTBOX_ID_PREFIX}-${instanceId}`;
+}
+
+export function slashCommandOptionId(listboxId: string, index: number): string {
+  return `${listboxId}-option-${index}`;
 }
 
 export type SlashCommandProvider = {
@@ -150,7 +154,8 @@ function commandRank(
   if (!query) return 0;
   const lowerName = name.toLowerCase();
   const lowerQuery = query.toLowerCase();
-  if (lowerName.startsWith(lowerQuery)) return 0;
+  if (lowerName === lowerQuery) return 0;
+  if (lowerName.startsWith(lowerQuery)) return 100;
   if (lowerName.split(/[-_:]/u).some((part) => part.startsWith(lowerQuery))) {
     return 1_000;
   }
@@ -228,37 +233,63 @@ export function buildSlashCommandMenu({
     0,
   );
   const groups: SlashCommandGroup[] = [];
-  let displayedCount = 0;
-  let totalMatchCount = 0;
-  let remainingMatchSlots = query ? SLASH_COMMAND_MATCH_LIMIT : Infinity;
+  if (!query) {
+    for (const provider of eligibleProviders) {
+      const commands = (
+        catalog.get(provider.pubkey.toLowerCase())?.commands ?? []
+      ).slice(0, SLASH_COMMAND_EMPTY_LIMIT_PER_AGENT);
+      if (commands.length === 0) continue;
+      groups.push({
+        agentDisplayName: provider.displayName,
+        agentPubkey: provider.pubkey,
+        commands: commands.map((command) => ({
+          agentDisplayName: provider.displayName,
+          agentPubkey: provider.pubkey,
+          description: command.description,
+          name: command.name,
+        })),
+      });
+    }
+    const displayedCount = groups.reduce(
+      (total, group) => total + group.commands.length,
+      0,
+    );
+    return {
+      displayedCount,
+      groups,
+      totalCommandCount,
+      totalMatchCount: totalCommandCount,
+    };
+  }
 
-  for (const provider of eligibleProviders) {
-    const entries = (catalog.get(provider.pubkey.toLowerCase())?.commands ?? [])
+  const matches = eligibleProviders.flatMap((provider, providerIndex) =>
+    (catalog.get(provider.pubkey.toLowerCase())?.commands ?? [])
       .map((command, publisherIndex) => ({
         command,
+        provider,
+        providerIndex,
         publisherIndex,
         rank: commandRank(command.name, command.description, query),
       }))
       .filter(
         (entry): entry is typeof entry & { rank: number } =>
           entry.rank !== null,
-      );
-    totalMatchCount += entries.length;
-    if (query) {
-      entries.sort(
-        (left, right) =>
-          left.rank - right.rank || left.publisherIndex - right.publisherIndex,
-      );
-    }
-    const visible = entries.slice(
-      0,
-      query
-        ? Math.max(0, remainingMatchSlots)
-        : SLASH_COMMAND_EMPTY_LIMIT_PER_AGENT,
-    );
-    if (query) remainingMatchSlots -= visible.length;
-    displayedCount += visible.length;
-    if (visible.length === 0) continue;
+      ),
+  );
+  matches.sort(
+    (left, right) =>
+      left.rank - right.rank ||
+      left.providerIndex - right.providerIndex ||
+      left.publisherIndex - right.publisherIndex,
+  );
+  const visibleByProvider = new Map<number, (typeof matches)[number][]>();
+  for (const match of matches.slice(0, SLASH_COMMAND_MATCH_LIMIT)) {
+    const visible = visibleByProvider.get(match.providerIndex) ?? [];
+    visible.push(match);
+    visibleByProvider.set(match.providerIndex, visible);
+  }
+  for (const [providerIndex, visible] of visibleByProvider) {
+    const provider = eligibleProviders[providerIndex];
     groups.push({
       agentDisplayName: provider.displayName,
       agentPubkey: provider.pubkey,
@@ -271,5 +302,10 @@ export function buildSlashCommandMenu({
     });
   }
 
-  return { displayedCount, groups, totalCommandCount, totalMatchCount };
+  return {
+    displayedCount: Math.min(matches.length, SLASH_COMMAND_MATCH_LIMIT),
+    groups,
+    totalCommandCount,
+    totalMatchCount: matches.length,
+  };
 }

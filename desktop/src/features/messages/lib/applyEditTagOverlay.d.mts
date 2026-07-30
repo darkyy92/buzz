@@ -14,4 +14,5 @@ export type Tag = string[];
 export function applyEditTagOverlay(
   originalTags: Tag[],
   editTags: Tag[] | undefined,
+  metadataOnly?: boolean,
 ): Tag[];

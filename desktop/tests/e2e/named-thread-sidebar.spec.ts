@@ -1,7 +1,30 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
 import { TEST_IDENTITIES, installMockBridge } from "../helpers/bridge";
+
+const THREAD_ROOT_ID = "mock-general-welcome";
+
+async function expectThreadReadAtLeast(page: Page, timestamp: number) {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ rootId }) => {
+          let latest = 0;
+          for (const [key, raw] of Object.entries(localStorage)) {
+            if (!key.startsWith("buzz.channel-read-state.v2:")) continue;
+            const value = JSON.parse(raw)[`thread:${rootId}`];
+            if (typeof value === "string") {
+              latest = Math.max(latest, Math.floor(Date.parse(value) / 1_000));
+            }
+          }
+          return latest;
+        },
+        { rootId: THREAD_ROOT_ID },
+      ),
+    )
+    .toBeGreaterThanOrEqual(timestamp);
+}
 
 test("thread rename persists to the relay-backed sidebar row", async ({
   page,
@@ -69,6 +92,24 @@ test("thread rename persists to the relay-backed sidebar row", async ({
 
   await page.getByTestId("auxiliary-panel-close").click();
   await page.getByTestId("channel-random").click();
+  const unreadReplyAt = await page.evaluate(
+    ({ pubkey, rootId }) => {
+      const createdAt = Math.floor(Date.now() / 1_000) + 60;
+      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "general",
+        content: "Unread reply after naming",
+        parentEventId: rootId,
+        pubkey,
+        createdAt,
+      });
+      return createdAt;
+    },
+    { pubkey: TEST_IDENTITIES.alice.pubkey, rootId: THREAD_ROOT_ID },
+  );
+  const unreadDot = page.getByTestId(
+    "named-thread-unread-mock-general-welcome",
+  );
+  await expect(unreadDot).toBeVisible();
   await namedRow.click();
   await expect(panel).toBeVisible();
   await expect(panel.getByTestId("message-thread-title")).toHaveText(
@@ -77,4 +118,48 @@ test("thread rename persists to the relay-backed sidebar row", async ({
   await expect(page).toHaveURL(
     /#\/channels\/[^?]+\?(?:.*&)?thread=mock-general-welcome(?:&.*)?$/,
   );
+  await expectThreadReadAtLeast(page, unreadReplyAt);
+
+  // Opening from the named row advances the durable thread frontier.
+  await page.getByTestId("auxiliary-panel-close").click();
+  await expect(unreadDot).toHaveCount(0);
+  await namedRow.click();
+  await expect(panel).toBeVisible();
+  await page.getByTestId("auxiliary-panel-close").click();
+  await expect(unreadDot).toHaveCount(0);
+
+  // A non-sidebar open is authoritative too: a thread-summary click must
+  // advance the same durable frontier used by the named-thread unread dot.
+  const summaryUnreadReplyAt = await page.evaluate(
+    ({ pubkey, rootId }) => {
+      const createdAt = Math.floor(Date.now() / 1_000) + 120;
+      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "general",
+        content: "Unread reply before summary open",
+        parentEventId: rootId,
+        pubkey,
+        createdAt,
+      });
+      return createdAt;
+    },
+    { pubkey: TEST_IDENTITIES.alice.pubkey, rootId: THREAD_ROOT_ID },
+  );
+  await expect(unreadDot).toBeVisible();
+  await page.getByTestId("message-thread-summary").first().click();
+  await expect(panel).toBeVisible();
+  await expectThreadReadAtLeast(page, summaryUnreadReplyAt);
+  await page.evaluate(
+    ({ pubkey }) => {
+      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "general",
+        content: "Live reply after the panel opened",
+        parentEventId: "mock-general-welcome",
+        pubkey,
+        createdAt: Math.floor(Date.now() / 1_000) + 180,
+      });
+    },
+    { pubkey: TEST_IDENTITIES.alice.pubkey },
+  );
+  await page.getByTestId("auxiliary-panel-close").click();
+  await expect(unreadDot).toBeVisible();
 });

@@ -1,7 +1,6 @@
 import * as React from "react";
 
 import {
-  SLASH_COMMAND_LISTBOX_ID,
   slashCommandOptionId,
   type SlashCommandSuggestion,
 } from "./slashCommandAutocomplete";
@@ -108,12 +107,15 @@ export function useComposerAutocompleteInsertions({
     editorElement.setAttribute("aria-expanded", String(slashCommands.isOpen));
     if (slashCommands.isOpen) {
       editorElement.setAttribute("aria-autocomplete", "list");
-      editorElement.setAttribute("aria-controls", SLASH_COMMAND_LISTBOX_ID);
+      editorElement.setAttribute("aria-controls", slashCommands.listboxId);
       editorElement.setAttribute("aria-haspopup", "listbox");
       if (slashCommands.suggestions.length > 0) {
         editorElement.setAttribute(
           "aria-activedescendant",
-          slashCommandOptionId(slashCommands.selectedIndex),
+          slashCommandOptionId(
+            slashCommands.listboxId,
+            slashCommands.selectedIndex,
+          ),
         );
       } else {
         editorElement.removeAttribute("aria-activedescendant");
@@ -134,6 +136,7 @@ export function useComposerAutocompleteInsertions({
   }, [
     richText.editor,
     slashCommands.isOpen,
+    slashCommands.listboxId,
     slashCommands.selectedIndex,
     slashCommands.suggestions.length,
   ]);

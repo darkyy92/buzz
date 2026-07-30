@@ -759,6 +759,7 @@ pub fn run() {
             get_channel_window,
             get_channel_messages_before,
             edit_message,
+            set_thread_title,
             delete_message,
             add_reaction,
             remove_reaction,

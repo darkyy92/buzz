@@ -104,10 +104,9 @@ test("keyboard selection is grouped, accessible, live, and focus-safe", async ({
   await expect(palette.getByRole("option")).toHaveCount(3);
   await expect(palette).toContainText("Review the current changes");
   await expect(palette).toContainText("Inspect the current workspace");
-  await expect(input).toHaveAttribute(
-    "aria-controls",
-    "message-composer-slash-commands",
-  );
+  const listboxId = await palette.getAttribute("id");
+  expect(listboxId).toBeTruthy();
+  await expect(input).toHaveAttribute("aria-controls", listboxId ?? "");
   await expect(input).toHaveAttribute("aria-expanded", "true");
 
   await input.press("ArrowUp");
@@ -203,16 +202,48 @@ test("explicit mentions scope commands in the thread composer", async ({
     `/#/channels/${CHANNEL_ID}?messageId=${THREAD_ROOT_ID}&thread=${THREAD_ROOT_ID}`,
     { waitUntil: "domcontentloaded" },
   );
-  const composer = page.getByTestId("thread-composer-overlay");
-  await expect(composer).toBeVisible();
-  const input = composer.getByTestId("message-input");
-
-  await input.fill("@charlie /");
-  const palette = composer.getByRole("listbox", {
+  const channel = channelComposer(page);
+  const channelInput = channel.getByTestId("message-input");
+  await channelInput.fill("/");
+  const channelPalette = channel.getByRole("listbox", {
     name: "Agent slash commands",
   });
+  const channelListboxId = await channelPalette.getAttribute("id");
+
+  const thread = page.getByTestId("thread-composer-overlay");
+  await expect(thread).toBeVisible();
+  const input = thread.getByTestId("message-input");
+  await input.fill("@charlie /");
+  const palette = thread.getByRole("listbox", {
+    name: "Agent slash commands",
+  });
+  const threadListboxId = await palette.getAttribute("id");
+  expect(channelListboxId).toBeTruthy();
+  expect(threadListboxId).toBeTruthy();
+  expect(threadListboxId).not.toBe(channelListboxId);
+  await expect(channelInput).toHaveAttribute(
+    "aria-controls",
+    channelListboxId ?? "",
+  );
+  await expect(input).toHaveAttribute("aria-controls", threadListboxId ?? "");
+  const channelActiveOptionId = await channelInput.getAttribute(
+    "aria-activedescendant",
+  );
+  const threadActiveOptionId = await input.getAttribute(
+    "aria-activedescendant",
+  );
+  expect(channelActiveOptionId).toMatch(
+    new RegExp(`^${channelListboxId}-option-\\d+$`),
+  );
+  expect(threadActiveOptionId).toMatch(
+    new RegExp(`^${threadListboxId}-option-\\d+$`),
+  );
+  expect(threadActiveOptionId).not.toBe(channelActiveOptionId);
   await expect(palette.getByRole("option")).toHaveCount(1);
   await expect(palette.getByText("/inspect", { exact: true })).toBeVisible();
+  await input.press("Shift+Tab");
+  await expect(input).toHaveText("@charlie /");
+  await input.focus();
   await input.press("Tab");
   await expect(input).toHaveText("@charlie /inspect ");
   await expect(input).toBeFocused();

@@ -173,6 +173,7 @@ const KIND_DELETION = 5;
 const KIND_REACTION = 7;
 const KIND_NIP29_DELETE_EVENT = 9005;
 const KIND_STREAM_MESSAGE_EDIT = 40003;
+const KIND_STREAM_THREAD_TITLE = 40009;
 const KIND_SYSTEM_MESSAGE = 40099;
 const KIND_HUDDLE_STARTED = 48100;
 const KIND_HUDDLE_PARTICIPANT_JOINED = 48101;
@@ -193,6 +194,7 @@ const PRESET_AUX = [
   KIND_REACTION, // 7
   KIND_NIP29_DELETE_EVENT, // 9005
   KIND_STREAM_MESSAGE_EDIT, // 40003
+  KIND_STREAM_THREAD_TITLE, // 40009
 ];
 
 const PRESET_ALL = [
@@ -205,6 +207,7 @@ const PRESET_ALL = [
   KIND_FORUM_POST, // 45001 (from CHANNEL_MESSAGE_EVENT_KINDS spread)
   KIND_FORUM_COMMENT, // 45003 (from CHANNEL_MESSAGE_EVENT_KINDS spread)
   KIND_STREAM_MESSAGE_EDIT, // 40003
+  KIND_STREAM_THREAD_TITLE, // 40009
   KIND_STREAM_MESSAGE_DIFF, // 40008
   KIND_SYSTEM_MESSAGE, // 40099
   KIND_HUDDLE_STARTED, // 48100
@@ -253,6 +256,10 @@ test("preset_aux_contains_correct_kinds", () => {
     PRESET_AUX.includes(40003),
     "must include kind 40003 (stream message edit)",
   );
+  assert.ok(
+    PRESET_AUX.includes(40009),
+    "must include kind 40009 (thread title)",
+  );
   // Edits are aux, not messages — must not overlap with messages preset (except shared reaction)
   assert.ok(!PRESET_AUX.includes(9), "must NOT include kind 9 (message)");
   assert.ok(
@@ -286,7 +293,7 @@ test("preset_messages_exact_saved_kind_array", () => {
 test("preset_aux_exact_saved_kind_array", () => {
   assert.deepEqual(
     [...PRESET_AUX].sort((a, b) => a - b),
-    [5, 7, 9005, 40003],
+    [5, 7, 9005, 40003, 40009],
   );
 });
 

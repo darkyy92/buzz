@@ -15,6 +15,7 @@ import {
   detectSlashCommandQuery,
   getSlashCommandFooterMessage,
   resolveLeadingAgentMentionPubkeys,
+  slashCommandListboxId,
   type SlashCommandQuery,
   type SlashCommandSuggestion,
 } from "./slashCommandAutocomplete";
@@ -33,6 +34,8 @@ export function useSlashCommandAutocomplete({
   ownerPubkey: string | null;
 }) {
   const membersQuery = useChannelMembersQuery(channelId, Boolean(channelId));
+  const instanceId = React.useId();
+  const listboxId = slashCommandListboxId(instanceId);
   const { activeCommunity } = useCommunities();
   const relayUrl = activeCommunity?.relayUrl ?? null;
   const acpCatalog = useAgentCommandCatalog(ownerPubkey, relayUrl);
@@ -186,12 +189,11 @@ export function useSlashCommandAutocomplete({
         return { handled: true };
       }
       if (
-        event.key === "Tab" ||
-        (event.key === "Enter" &&
-          !event.ctrlKey &&
-          !event.metaKey &&
-          !event.altKey &&
-          !event.shiftKey)
+        (event.key === "Tab" || event.key === "Enter") &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey
       ) {
         event.preventDefault();
         return { handled: true, suggestion: suggestions[selectedIndex] };
@@ -208,6 +210,7 @@ export function useSlashCommandAutocomplete({
     emptyMessage,
     footerMessage,
     isOpen,
+    listboxId,
     selectedIndex,
     suggestions,
     updateQuery,

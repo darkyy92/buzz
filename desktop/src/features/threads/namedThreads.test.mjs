@@ -9,7 +9,7 @@ import {
   reduceNamedThreadTitleEdits,
 } from "./namedThreads.ts";
 
-function event({ createdAt, id, kind = 40003, pubkey = "alice", tags }) {
+function event({ createdAt, id, kind = 40009, pubkey = "alice", tags }) {
   return {
     id,
     pubkey,
@@ -43,9 +43,14 @@ test("fallback title uses the first non-empty line and caps it at 80 characters"
   assert.equal(deriveFallbackThreadTitle("x".repeat(90)).length, 80);
 });
 
-test("only marked NIP-14 edit events become named threads", () => {
+test("only marked title protocol events become named threads", () => {
   const valid = titleEdit("edit-1", 10, "Release notes");
   assert.equal(parseNamedThreadTitleEdit(valid)?.title, "Release notes");
+  assert.equal(
+    parseNamedThreadTitleEdit({ ...valid, kind: 40003 })?.title,
+    "Release notes",
+    "legacy SDK combined edits remain compatible",
+  );
   assert.equal(
     parseNamedThreadTitleEdit({
       ...valid,
@@ -53,6 +58,7 @@ test("only marked NIP-14 edit events become named threads", () => {
     }),
     null,
   );
+  assert.equal(parseNamedThreadTitleEdit({ ...valid, kind: 40010 }), null);
 });
 
 test("latest title wins and a later empty subject clears the explicit thread", () => {
@@ -70,6 +76,15 @@ test("latest title wins and a later empty subject clears the explicit thread", (
     ]),
     [],
   );
+});
+
+test("title resolution breaks equal timestamps deterministically by event id", () => {
+  const titles = reduceNamedThreadTitleEdits([
+    { ...titleEdit("a", 20, "Legacy"), kind: 40003 },
+    titleEdit("b", 20, "Protocol title"),
+  ]);
+  assert.equal(titles[0].title, "Protocol title");
+  assert.equal(titles[0].titleEventId, "b");
 });
 
 test("reply activity tracks recency and the newest incoming unread candidate", () => {

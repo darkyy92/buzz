@@ -25,16 +25,28 @@
  *   - a NIP-14 `subject` comes from the edit when supplied. This is the one
  *     mutable metadata field: Buzz uses it as the thread title. An empty
  *     subject deliberately clears a prior explicit title.
+ *   - a protocol-distinct title event is passed with `metadataOnly=true`. In
+ *     that case body-coupled imeta/emoji tags stay exactly as they were.
  *   - all other tag kinds (`h`, `e`, `p` mentions, etc.) come exclusively
  *     from the original — the edit can't rewrite channel membership,
  *     thread refs, or mention targets.
  *
  * When `editTags` is undefined, returns `originalTags` unchanged.
  */
-export function applyEditTagOverlay(originalTags, editTags) {
+export function applyEditTagOverlay(
+  originalTags,
+  editTags,
+  metadataOnly = false,
+) {
   if (!editTags) return originalTags;
-  const editEmoji = editTags.filter((t) => t[0] === "emoji");
   const editSubject = editTags.find((t) => t[0] === "subject");
+  if (metadataOnly) {
+    return [
+      ...originalTags.filter((t) => !editSubject || t[0] !== "subject"),
+      ...(editSubject ? [editSubject] : []),
+    ];
+  }
+  const editEmoji = editTags.filter((t) => t[0] === "emoji");
   // imeta is always fully replaced by the edit. emoji is replaced only when
   // the edit actually supplies emoji tags; otherwise the original's are kept.
   const droppedFromOriginal =

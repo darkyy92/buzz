@@ -1,4 +1,8 @@
 import type { RelayEvent } from "@/shared/api/types";
+import {
+  KIND_STREAM_MESSAGE_EDIT,
+  KIND_STREAM_THREAD_TITLE,
+} from "@/shared/constants/kinds";
 
 export const THREAD_TITLE_MARKER = "buzz-thread-title";
 export const MAX_THREAD_TITLE_LENGTH = 80;
@@ -67,7 +71,12 @@ export function parseNamedThreadTitleEdit(
   event: RelayEvent,
   allowedChannelIds?: ReadonlySet<string>,
 ): ParsedThreadTitleEdit | null {
-  if (event.kind !== 40003) return null;
+  if (
+    event.kind !== KIND_STREAM_THREAD_TITLE &&
+    event.kind !== KIND_STREAM_MESSAGE_EDIT
+  ) {
+    return null;
+  }
   if (
     !event.tags.some((tag) => tag[0] === "t" && tag[1] === THREAD_TITLE_MARKER)
   ) {

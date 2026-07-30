@@ -887,6 +887,7 @@ function MessageComposerImpl({
               emptyMessage={slashCommands.emptyMessage}
               footerMessage={slashCommands.footerMessage}
               groups={slashCommands.isOpen ? slashCommands.groups : []}
+              listboxId={slashCommands.listboxId}
               onSelect={autocompleteInsertions.slash}
               selectedIndex={slashCommands.selectedIndex}
             />

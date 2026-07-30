@@ -13,18 +13,22 @@ import {
   upsertNamedThreadTitleEvent,
 } from "@/features/threads/namedThreads";
 import { relayClient } from "@/shared/api/relayClient";
-import { editMessage } from "@/shared/api/tauri";
+import { setThreadTitle } from "@/shared/api/tauri";
 import type { Channel, RelayEvent } from "@/shared/api/types";
 import {
   CHANNEL_MESSAGE_EVENT_KINDS,
   KIND_STREAM_MESSAGE_EDIT,
+  KIND_STREAM_THREAD_TITLE,
 } from "@/shared/constants/kinds";
 
+const THREAD_TITLE_EVENT_KINDS = [
+  KIND_STREAM_THREAD_TITLE,
+  KIND_STREAM_MESSAGE_EDIT,
+] as const;
+
 type SetThreadTitleInput = {
-  body: string;
   channelId: string;
   rootId: string;
-  tags?: string[][];
   title: string;
 };
 
@@ -58,7 +62,9 @@ export function useNamedThreadsQuery(
     queryKey,
     queryFn: async (): Promise<NamedThread[]> => {
       const titleEvents = await relayClient.fetchEvents({
-        kinds: [KIND_STREAM_MESSAGE_EDIT],
+        // 40009 is the metadata-only protocol. 40003 remains in the query so
+        // SDK-era combined body+subject edits keep their persisted titles.
+        kinds: [...THREAD_TITLE_EVENT_KINDS],
         "#h": normalizedChannelIds,
         "#t": [THREAD_TITLE_MARKER],
         limit: NAMED_THREAD_QUERY_LIMIT,
@@ -96,7 +102,7 @@ export function useNamedThreadsQuery(
     void relayClient
       .subscribeLive(
         {
-          kinds: [KIND_STREAM_MESSAGE_EDIT],
+          kinds: [...THREAD_TITLE_EVENT_KINDS],
           "#h": normalizedChannelIds,
           "#t": [THREAD_TITLE_MARKER],
           limit: 0,
@@ -172,30 +178,20 @@ export function useSetThreadTitle(currentPubkey?: string) {
   return React.useCallback(
     async (input: SetThreadTitleInput): Promise<string> => {
       const title = normalizeThreadTitle(input.title);
-      const imetaTags = input.tags?.filter((tag) => tag[0] === "imeta") ?? [];
-      const emojiTags = input.tags?.filter((tag) => tag[0] === "emoji") ?? [];
-      await editMessage(
-        input.channelId,
-        input.rootId,
-        input.body,
-        imetaTags,
-        emojiTags,
-        undefined,
-        title,
-      );
+      await setThreadTitle(input.channelId, input.rootId, title);
 
       const syntheticEvent: RelayEvent = {
         id: `local-thread-title-${crypto.randomUUID()}`,
         pubkey: currentPubkey ?? "",
         created_at: Math.floor(Date.now() / 1_000),
-        kind: KIND_STREAM_MESSAGE_EDIT,
+        kind: KIND_STREAM_THREAD_TITLE,
         tags: [
           ["h", input.channelId],
           ["e", input.rootId],
           ["subject", title],
           ["t", THREAD_TITLE_MARKER],
         ],
-        content: input.body,
+        content: "",
         sig: "",
       };
       queryClient.setQueriesData<NamedThread[]>(

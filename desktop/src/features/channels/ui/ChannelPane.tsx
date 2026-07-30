@@ -151,6 +151,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   threadHeadMessage,
   threadMessages,
   threadMessagesPending = false,
+  threadMessagesReady = true,
   threadPanelWidthPx,
   threadScrollTargetId,
   threadTypingPubkeys,
@@ -882,6 +883,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                 widthPx={threadPanelWidthPx}
                 threadReplies={threadMessages}
                 threadRepliesPending={threadMessagesPending}
+                threadRepliesReady={threadMessagesReady}
                 threadUnreadCount={threadUnreadCounts?.get(
                   threadHeadMessage.id,
                 )}

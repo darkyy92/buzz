@@ -463,7 +463,7 @@ pub async fn get_event(event_id: String, state: State<'_, AppState>) -> Result<S
         &state,
         &[serde_json::json!({
             "ids": [event_id],
-            "kinds": [0, 1, 3, 5, 7, 9, 30078, 40002, 40003, 40008, 40099, 40100, 45001, 45003, buzz_core_pkg::kind::KIND_HUDDLE_STARTED],
+            "kinds": [0, 1, 3, 5, 7, 9, 30078, 40002, 40003, 40008, buzz_core_pkg::kind::KIND_STREAM_THREAD_TITLE, 40099, 40100, 45001, 45003, buzz_core_pkg::kind::KIND_HUDDLE_STARTED],
             "limit": 1
         })],
     )

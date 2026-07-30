@@ -7,8 +7,6 @@ export async function editMessage(
   mediaTags?: string[][],
   emojiTags?: string[][],
   mentionPubkeys?: string[],
-  /** NIP-14 thread title. Empty clears it; undefined is a body-only edit. */
-  subject?: string,
 ): Promise<void> {
   await invokeTauri("edit_message", {
     channelId,
@@ -17,6 +15,14 @@ export async function editMessage(
     mediaTags: mediaTags ?? [],
     emojiTags: emojiTags ?? [],
     mentionPubkeys: mentionPubkeys ?? null,
-    subject,
   });
+}
+
+/** Publish a metadata-only NIP-14 title edit. Empty title clears it. */
+export async function setThreadTitle(
+  channelId: string,
+  eventId: string,
+  subject: string,
+): Promise<void> {
+  await invokeTauri("set_thread_title", { channelId, eventId, subject });
 }

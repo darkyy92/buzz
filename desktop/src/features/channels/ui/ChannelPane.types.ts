@@ -154,6 +154,7 @@ export type ChannelPaneProps = {
   threadAllMessages: TimelineMessage[];
   threadMessages: MainTimelineEntry[];
   threadMessagesPending?: boolean;
+  threadMessagesReady?: boolean;
   threadPanelWidthPx: number;
   threadTypingPubkeys: string[];
   threadReplyTargetMessage: TimelineMessage | null;

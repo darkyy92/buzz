@@ -46,6 +46,7 @@ import {
   KIND_REPO_ANNOUNCEMENT,
   KIND_REPO_STATE,
   KIND_STREAM_MESSAGE_EDIT,
+  KIND_STREAM_THREAD_TITLE,
   KIND_SYSTEM_MESSAGE,
   KIND_TEXT_NOTE,
   KIND_USER_STATUS,
@@ -1231,6 +1232,7 @@ const CHANNEL_WINDOW_AUX_KINDS = new Set([
   KIND_DELETION,
   KIND_NIP29_DELETION,
   KIND_STREAM_MESSAGE_EDIT,
+  KIND_STREAM_THREAD_TITLE,
 ]);
 const CHANNEL_WINDOW_AUX_DELETION_KINDS = new Set([
   KIND_DELETION,
@@ -8766,7 +8768,6 @@ async function handleEditMessage(
     content: string;
     mediaTags?: string[][] | null;
     emojiTags?: string[][] | null;
-    subject?: string;
   },
   config: E2eConfig | undefined,
 ): Promise<void> {
@@ -8774,27 +8775,58 @@ async function handleEditMessage(
   const emojiTags = args.emojiTags ?? [];
   const extraTags = [...mediaTags, ...emojiTags];
   const tags = [["h", args.channelId], ["e", args.eventId], ...extraTags];
-  if (typeof args.subject === "string") {
-    tags.push(["subject", args.subject.trim()]);
-    tags.push(["t", "buzz-thread-title"]);
-  }
   const content = args.content.trim();
+  await emitMockEditEvent(
+    KIND_STREAM_MESSAGE_EDIT,
+    args.channelId,
+    content,
+    tags,
+    config,
+  );
+}
+
+async function handleSetThreadTitle(
+  args: { channelId: string; eventId: string; subject: string },
+  config: E2eConfig | undefined,
+): Promise<void> {
+  const tags = [
+    ["h", args.channelId],
+    ["e", args.eventId],
+    ["subject", args.subject.trim()],
+    ["t", "buzz-thread-title"],
+  ];
+  await emitMockEditEvent(
+    KIND_STREAM_THREAD_TITLE,
+    args.channelId,
+    "",
+    tags,
+    config,
+  );
+}
+
+async function emitMockEditEvent(
+  kind: number,
+  channelId: string,
+  content: string,
+  tags: string[][],
+  config: E2eConfig | undefined,
+): Promise<void> {
   const identity = getIdentity(config);
 
   if (!identity) {
     const editEvent = createMockEvent(
-      KIND_STREAM_MESSAGE_EDIT,
+      kind,
       content,
       tags,
       getMockMemberPubkey(config),
     );
-    recordMockMessage(args.channelId, editEvent);
-    emitMockLiveEvent(args.channelId, editEvent);
+    recordMockMessage(channelId, editEvent);
+    emitMockLiveEvent(channelId, editEvent);
     return;
   }
 
   await submitSignedEvent(config, {
-    kind: KIND_STREAM_MESSAGE_EDIT,
+    kind,
     content,
     tags,
   });
@@ -11343,6 +11375,11 @@ export function maybeInstallE2eTauriMocks() {
       case "edit_message":
         return handleEditMessage(
           payload as Parameters<typeof handleEditMessage>[0],
+          activeConfig,
+        );
+      case "set_thread_title":
+        return handleSetThreadTitle(
+          payload as Parameters<typeof handleSetThreadTitle>[0],
           activeConfig,
         );
       case "add_reaction":

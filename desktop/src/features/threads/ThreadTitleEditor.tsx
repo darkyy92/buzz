@@ -59,10 +59,8 @@ export function ThreadTitleEditor({
     setIsSaving(true);
     try {
       const saved = await setThreadTitle({
-        body: threadHead.body,
         channelId,
         rootId: threadHead.id,
-        tags: threadHead.tags,
         title: draft,
       });
       setSavedTitle(saved || null);

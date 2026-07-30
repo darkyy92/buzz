@@ -202,11 +202,13 @@ test("imeta and emoji are overlaid together from the edit", () => {
   );
 });
 
-test("NIP-14 subject from an edit replaces the prior thread title", () => {
+test("metadata-only NIP-14 title replaces the title and preserves body metadata", () => {
   const original = [
     ["h", "uuid"],
     ["subject", "Old title"],
     ["p", "mention1"],
+    IMETA("https://b/original.png"),
+    EMOJI("catjam", "https://b/catjam.gif"),
   ];
   const edit = [
     ["h", "uuid"],
@@ -215,7 +217,7 @@ test("NIP-14 subject from an edit replaces the prior thread title", () => {
     ["t", "buzz-thread-title"],
   ];
 
-  const out = applyEditTagOverlay(original, edit);
+  const out = applyEditTagOverlay(original, edit, true);
 
   assert.deepEqual(
     out.filter((tag) => tag[0] === "subject"),
@@ -230,6 +232,16 @@ test("NIP-14 subject from an edit replaces the prior thread title", () => {
     false,
     "the query marker is edit metadata and must not leak into the message",
   );
+  assert.deepEqual(
+    out.filter((tag) => tag[0] === "imeta"),
+    [IMETA("https://b/original.png")],
+    "metadata-only title edits must preserve attachments",
+  );
+  assert.deepEqual(
+    out.filter((tag) => tag[0] === "emoji"),
+    [EMOJI("catjam", "https://b/catjam.gif")],
+    "metadata-only title edits must preserve custom emoji metadata",
+  );
 });
 
 test("empty NIP-14 subject clears a prior explicit thread title", () => {
@@ -237,14 +249,45 @@ test("empty NIP-14 subject clears a prior explicit thread title", () => {
     ["h", "uuid"],
     ["subject", "Old title"],
   ];
-  const out = applyEditTagOverlay(original, [
-    ["e", "root"],
-    ["subject", ""],
-  ]);
+  const out = applyEditTagOverlay(
+    original,
+    [
+      ["e", "root"],
+      ["subject", ""],
+      ["t", "buzz-thread-title"],
+    ],
+    true,
+  );
 
   assert.deepEqual(
     out.filter((tag) => tag[0] === "subject"),
     [["subject", ""]],
+  );
+});
+
+test("legacy marked kind-40003 metadata remains body-coupled", () => {
+  const original = [
+    ["h", "uuid"],
+    IMETA("https://b/original.png"),
+    EMOJI("catjam", "https://b/catjam.gif"),
+  ];
+  const edit = [
+    ["h", "uuid"],
+    ["e", "root"],
+    ["subject", "Legacy combined edit"],
+    ["t", "buzz-thread-title"],
+    IMETA("https://b/edited.png"),
+    EMOJI("rickroll", "https://b/rickroll.gif"),
+  ];
+
+  const out = applyEditTagOverlay(original, edit);
+  assert.deepEqual(
+    out.filter((tag) => tag[0] === "imeta"),
+    [IMETA("https://b/edited.png")],
+  );
+  assert.deepEqual(
+    out.filter((tag) => tag[0] === "emoji"),
+    [EMOJI("rickroll", "https://b/rickroll.gif")],
   );
 });
 

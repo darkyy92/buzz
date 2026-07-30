@@ -51,6 +51,7 @@ test("excludes auxiliary kinds (reactions, edits, deletions)", () => {
     event(hex("3"), 40003), // edit — excluded
     event(hex("4"), 5), // NIP-09 deletion — excluded
     event(hex("5"), 9005), // Buzz-native deletion — excluded
+    event(hex("6"), 40009), // thread title — excluded
   ];
   assert.deepEqual(collectMessageIdsForAuxBackfill(events), [hex("1")]);
 });
@@ -60,18 +61,20 @@ test("returns empty for a window of only auxiliary events", () => {
   assert.deepEqual(collectMessageIdsForAuxBackfill(events), []);
 });
 
-test("collects reaction and edit ids for deletion-marker backfill", () => {
+test("collects reaction, edit, and title ids for deletion-marker backfill", () => {
   const events = [
     event(hex("1"), 9),
     event(hex("2"), 7),
     event(hex("3"), 40003),
     event(hex("4"), 5),
     event(hex("5"), 9005),
+    event(hex("6"), 40009),
   ];
 
   assert.deepEqual(collectAuxEventIdsForDeletionBackfill(events), [
     hex("2"),
     hex("3"),
+    hex("6"),
   ]);
 });
 

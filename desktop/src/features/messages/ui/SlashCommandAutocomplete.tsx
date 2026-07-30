@@ -5,10 +5,7 @@ import type {
   SlashCommandGroup,
   SlashCommandSuggestion,
 } from "@/features/messages/lib/slashCommandAutocomplete";
-import {
-  SLASH_COMMAND_LISTBOX_ID,
-  slashCommandOptionId,
-} from "@/features/messages/lib/slashCommandAutocomplete";
+import { slashCommandOptionId } from "@/features/messages/lib/slashCommandAutocomplete";
 import { cn } from "@/shared/lib/cn";
 import {
   POPOVER_CUSTOM_ENTER_MOTION_CLASS,
@@ -18,6 +15,7 @@ import {
 
 type SlashCommandAutocompleteProps = {
   groups: readonly SlashCommandGroup[];
+  listboxId: string;
   emptyMessage: string | null;
   footerMessage: string | null;
   onSelect: (suggestion: SlashCommandSuggestion) => void;
@@ -27,6 +25,7 @@ type SlashCommandAutocompleteProps = {
 export const SlashCommandAutocomplete = React.memo(
   function SlashCommandAutocomplete({
     groups,
+    listboxId,
     emptyMessage,
     footerMessage,
     onSelect,
@@ -58,7 +57,7 @@ export const SlashCommandAutocomplete = React.memo(
           <div
             aria-label="Agent slash commands"
             className="min-h-0 overflow-y-auto p-1"
-            id={SLASH_COMMAND_LISTBOX_ID}
+            id={listboxId}
             ref={listRef}
             role="listbox"
           >
@@ -94,7 +93,7 @@ export const SlashCommandAutocomplete = React.memo(
                       )}
                       data-command-index={index}
                       data-testid={`slash-command-suggestion-${group.agentPubkey}-${command.name}`}
-                      id={slashCommandOptionId(index)}
+                      id={slashCommandOptionId(listboxId, index)}
                       key={`${group.agentPubkey}:${command.name}`}
                       aria-selected={index === selectedIndex}
                       onMouseDown={(event) => {
