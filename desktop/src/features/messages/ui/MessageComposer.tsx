@@ -209,7 +209,7 @@ function MessageComposerImpl({
     mentions.isMentionOpen ||
     channelLinks.isChannelOpen ||
     emojiAutocomplete.isEmojiAutocompleteOpen ||
-    slashCommands.isOpen;
+    (slashCommands.isOpen && slashCommands.suggestions.length > 0);
 
   const submitMessageRef = React.useRef<() => void>(() => {});
   const composerScrollRef = React.useRef<HTMLDivElement>(null);

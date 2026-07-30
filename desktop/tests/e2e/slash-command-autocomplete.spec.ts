@@ -42,6 +42,21 @@ function channelComposer(page: Page): Locator {
   return page.getByTestId("channel-composer-overlay");
 }
 
+async function latestSentMessage(page: Page) {
+  return page.evaluate(() => {
+    const entry = (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).findLast(
+      (candidate) => candidate.command === "send_channel_message",
+    );
+    return entry?.payload as
+      | {
+          channelId?: string;
+          content?: string;
+          parentEventId?: string | null;
+        }
+      | undefined;
+  });
+}
+
 async function openGeneral(page: Page) {
   await page.goto(`/#/channels/${CHANNEL_ID}`, {
     waitUntil: "domcontentloaded",
@@ -193,6 +208,57 @@ test("mouse, Escape, and ordinary prose keep composer semantics", async ({
   await composer.getByText("/goal", { exact: true }).click();
   await expect(input).toHaveText(/@alice \/goal $/i);
   await expect(input).toBeFocused();
+});
+
+test("unknown slash commands still send from the channel composer", async ({
+  page,
+}) => {
+  const composer = channelComposer(page);
+  const input = composer.getByTestId("message-input");
+  await input.fill("/unknown");
+
+  const palette = composer.getByRole("listbox", {
+    name: "Agent slash commands",
+  });
+  await expect(palette).toBeVisible();
+  await expect(palette.getByRole("option")).toHaveCount(0);
+  await expect(composer).toContainText("No matching commands");
+
+  await input.press("Enter");
+
+  await expect(input).toHaveText("");
+  await expect(page.getByText("/unknown", { exact: true })).toBeVisible();
+});
+
+test("unknown slash commands still send from the thread composer", async ({
+  page,
+}) => {
+  await page.goto(
+    `/#/channels/${CHANNEL_ID}?messageId=${THREAD_ROOT_ID}&thread=${THREAD_ROOT_ID}`,
+    { waitUntil: "domcontentloaded" },
+  );
+  const thread = page.getByTestId("thread-composer-overlay");
+  await expect(thread).toBeVisible();
+  const input = thread.getByTestId("message-input");
+  await input.fill("/unknown");
+
+  const palette = thread.getByRole("listbox", {
+    name: "Agent slash commands",
+  });
+  await expect(palette).toBeVisible();
+  await expect(palette.getByRole("option")).toHaveCount(0);
+  await expect(thread).toContainText("No matching commands");
+
+  await input.press("Enter");
+
+  await expect
+    .poll(() => latestSentMessage(page))
+    .toMatchObject({
+      channelId: CHANNEL_ID,
+      content: "/unknown",
+      parentEventId: THREAD_ROOT_ID,
+    });
+  await expect(input).toHaveText("");
 });
 
 test("explicit mentions scope commands in the thread composer", async ({
