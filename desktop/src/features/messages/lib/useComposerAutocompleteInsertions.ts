@@ -18,6 +18,17 @@ type EmojiAutocomplete = ReturnType<typeof useEmojiAutocomplete>;
 type Mentions = ReturnType<typeof useMentions>;
 type SlashCommands = ReturnType<typeof useSlashCommandAutocomplete>;
 
+export function getMountedEditorElement(
+  editor: UseRichTextEditorResult["editor"],
+): HTMLElement | null {
+  if (!editor) return null;
+  try {
+    return editor.view.dom;
+  } catch {
+    return null;
+  }
+}
+
 export function handleAutocompleteKeyResult<T>(
   result: { handled: boolean; suggestion?: T },
   onSelect: (suggestion: T) => void,
@@ -102,7 +113,7 @@ export function useComposerAutocompleteInsertions({
   );
 
   React.useEffect(() => {
-    const editorElement = richText.editor?.view.dom;
+    const editorElement = getMountedEditorElement(richText.editor);
     if (!editorElement) return;
     editorElement.setAttribute("aria-expanded", String(slashCommands.isOpen));
     if (slashCommands.isOpen) {
